@@ -18,6 +18,7 @@ def test_inventory_bootstrap_reads_are_known_without_allowing_native_mutations()
         "Inventory", "DropsInventoryRewardGroupStatus", "ViewerRewardDropInventory",
         "RewardCodeModal", "ViewerDropsDashboard", "CoreAuthCurrentUser",
         "CoreActionsCurrentUser", "TopNav_CurrentUser", "UserMenuCurrentUser",
+        "PlaybackAccessToken_Template",
     } <= WEBSITE_READ_OPERATIONS
     assert WEBSITE_READ_OPERATIONS.isdisjoint({
         "DropsPage_ClaimDropRewards", "CoreUtilsSetLanguagePreference",

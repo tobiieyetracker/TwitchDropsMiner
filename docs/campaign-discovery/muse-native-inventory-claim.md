@@ -1,7 +1,9 @@
 # Native inventory claim validation
 
-Status: candidate, not yet accepted by Twitch on Muse. This is a bounded test of
-one already-earned reward, not unattended claiming or a deployed miner.
+Status: claim remains unverified on Muse. The native path stopped on SDK HTTP
+429 before clicking. This is a bounded candidate test of one already-earned
+reward, not unattended claiming or a deployed miner. No further live run is
+currently scheduled or authorized by this document alone.
 
 First Muse run, `75e9ec5`: all 239 focused offline tests passed. The live run
 stopped during Python identity validation with `ClientConnectionError`, before
@@ -32,6 +34,28 @@ validation remain enabled. This is a targeted initialization correction, not
 yet a proven explanation. If a request still fails, `request_failure` records
 only exception types and basename/function/line locations, without exception
 messages, locals, full paths, URLs or credentials. There are no retries.
+
+Third Muse run, `66cb023`: 243/243 focused tests passed. With the new context,
+Python identity validation and Inventory preflight both returned HTTP 200;
+there was no `request_failure`. The target was 60/60, unclaimed, account-linked,
+and had a genuine claim instance. All 21 cookies imported; browser auth/device
+comparisons passed. The official inventory document loaded, but the SDK
+document on `k.twitchcdn.net` returned 429 around 7.6 seconds, without a parsed
+Retry-After. The script stopped before any accepted website Inventory, native
+click or claim request. The browser closed and the parent cleaned its processes
+and relay. No native journal was created; original state remained unchanged.
+Report on Muse: `native-claim-66cb023-20260930-2358.json`.
+
+This establishes that the corrected Python read path works in that run. It
+does not establish the exact cause of the preceding connection errors, remove
+the SDK rate limit, or prove native claim acceptance. The observed blocked
+`PlaybackAccessToken_Template` operation is a separate guard observation; it
+does not explain the SDK 429 by itself. Offline inspection subsequently found
+its read-only query in the saved `twitch-campaign-page.html` inline bootstrap
+(character offsets 13412/14004). It has been added to the read allowlist to
+correct that false block, with a focused test. That correction has not been
+tested live and is not evidence that the SDK 429 has been resolved. Do not rerun
+on that assumption.
 
 The previous Python attempts had no accepted integrity context. The latest
 source-derived hash returned an explicit integrity challenge. Changing a hash
@@ -89,10 +113,11 @@ or an unconfirmed shutdown. Only the exact target's returned `isClaimed:true`
 produces `claim_confirmed`. A successful HTTP response, native success message,
 token issuance or response status alone is insufficient.
 
-## One controlled Muse run
+## Historical controlled Muse command
 
-First fast-forward to the commit containing this document, preserving all
-untracked/local files. Run the focused offline tests. Do not install a cron job.
+The following command was used for the recorded bounded runs. Do not run it
+again merely because a documentation update was pulled. Any new run needs a
+specific, evidence-based reason; preserve every prior report and journal.
 
 Using the previously checked parent/relay (read current proxy credentials from
 the existing environment, never write them into this command):

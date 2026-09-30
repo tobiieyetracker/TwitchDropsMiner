@@ -14,6 +14,9 @@ from watch_check_state import WatchCheckError, _field, _identifier, check_envelo
 
 # Read operations found in OperationDefinition ASTs in the already saved
 # twitch-drops-root.js and twitch-assets/*.js (2026-09-30). No live requests.
+# PlaybackAccessToken_Template additionally comes from the raw query string in
+# twitch-campaign-page.html's inline bootstrap (line 1, character offset 13412),
+# not an AST: it selects only streamPlaybackAccessToken/videoPlaybackAccessToken.
 # Unknown persisted operations are not assumed to be reads just because their
 # name differs from ClaimDrop; the browser request guard uses this allowlist.
 WEBSITE_READ_OPERATIONS = frozenset({
@@ -42,6 +45,7 @@ WEBSITE_READ_OPERATIONS = frozenset({
     "LiveNotificationsToggle_User", "LiveShoppingProductDetails", "LiveShoppingProductSummaries",
     "LiveStreamTime", "NielsenContentMetadata", "OfflineBannerOverlay",
     "OfflineEmbedVODAndSchedule", "PartnerPlusPublicQuery", "PlaybackAccessToken",
+    "PlaybackAccessToken_Template",
     "PlayerTrackingContextQuery", "PrefetchPlaybackAccessToken", "PreviewContentOverlayQuery",
     "PrimeLinkConnectQuery", "PrimeLinking_CurrentUser", "Prime_Current_User",
     "Prime_PrimeOfferList_PrimeOffers_Eligibility", "Prime_PrimeOffers_CurrentUser", "Prime_PrimeOffers_PrimeOfferIds_Eligibility",
