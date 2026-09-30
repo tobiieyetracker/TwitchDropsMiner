@@ -15,8 +15,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import aiohttp
-from yarl import URL
 
+from browser_cookie_import import BrowserCookieError, load_browser_cookies
 from check_browser_proxy import error_code
 from integrity_diagnostics import IntegrityAudit
 from web_session import GQL_URL, WEB_URL, WEB_CLIENT_ID, HEADER_NAMES, browser_proxy_settings
@@ -229,15 +229,17 @@ class NetworkObservation:
         self.groups.clear()
 
 
-def read_token(path: Path) -> str:
-    # The explicitly selected file is the user's trusted local aiohttp cookie jar.
-    # Load only; never save it or copy it into a browser profile on disk.
-    jar = aiohttp.CookieJar()
-    jar.load(path)
-    cookie = jar.filter_cookies(URL(WEB_URL)).get("auth-token")
-    if cookie is None or not cookie.value:
-        raise ProbeFailure("cookie_has_no_twitch_auth_token")
-    return cookie.value
+def check_imported_cookies(cookies: list[dict[str, Any]], token: str, device: str | None) -> dict[str, Any]:
+    """Check the browser store before navigation, without reporting cookie values."""
+    tokens = {c.get("value") for c in cookies if c.get("name") == "auth-token"}
+    devices = {c.get("value") for c in cookies if c.get("name") == "unique_id"}
+    result = {
+        "browser_auth_matches": tokens == {token},
+        "browser_device_matches": devices == {device} if device is not None else None,
+    }
+    if not result["browser_auth_matches"] or result["browser_device_matches"] is False:
+        raise ProbeFailure("browser_cookie_import_mismatch")
+    return result
 
 
 def dashboard_state(body: Any, user_id: str) -> dict[str, Any]:
@@ -304,7 +306,7 @@ def persisted_dashboard(operation: Any) -> dict[str, Any] | None:
 
 
 class BrowserCapture:
-    def __init__(self, token: str, user_id: str, report: dict[str, Any]):
+    def __init__(self, token: str, user_id: str, report: dict[str, Any], *, expected_device: str | None = None):
         self.token, self.user_id, self.report = token, user_id, report
         self.ready = asyncio.Event()
         self.rate_limited = asyncio.Event()
@@ -313,7 +315,7 @@ class BrowserCapture:
         self.closed = False
         report.update(dashboard_responses=[], integrity_responses=[], resource_failures=[], rate_limits=[], page_errors=0)
         self.network = NetworkObservation(report)
-        self.audit = IntegrityAudit(token)
+        self.audit = IntegrityAudit(token, expected_device=expected_device)
 
     def check_rate_limit(self) -> None:
         if self.rate_limited.is_set():
@@ -397,7 +399,7 @@ class BrowserCapture:
                             summary[key] = "cancelled"
                     self.audit.observe_issuance(summary, headers, body, self.network.metadata(response.request))
                     if summary["headers_state"] != "parsed":
-                        summary.update(oauth_matches=None, web_client_matches=None)
+                        summary.update(oauth_matches=None, web_client_matches=None, device_cookie_matches=None)
             if response.url != GQL_URL:
                 return
             operations = response.request.post_data_json
@@ -427,6 +429,7 @@ class BrowserCapture:
                 if (
                     not self.rate_limited.is_set() and self.control is None and accepted(state) and state["oauth_matches"]
                     and state["web_client_matches"] and state["device_header_present"]
+                    and state["device_cookie_matches"] is not False
                     and headers.get("user-agent")
                 ):
                     self.control = payload, {key: value for key, value in headers.items() if key in READ_HEADERS}
@@ -464,7 +467,9 @@ class BrowserCapture:
 async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int) -> tuple[int, dict[str, Any]]:
     report: dict[str, Any] = {"state": "failed", "phase": "cookie_load"}
     try:
-        token = read_token(cookie_file)
+        imported = load_browser_cookies(cookie_file)
+        token = imported.auth_token
+        report["cookie_import"] = dict(imported.summary)
         proxy_options = browser_proxy_settings(proxy) if proxy else None
         # Build after main() enables system trust; aiohttp may cache an SSL
         # context at import time. Verification and hostname checks stay enabled.
@@ -488,7 +493,7 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
             report["web_token_valid"] = True
 
             from playwright.async_api import async_playwright
-            capture = BrowserCapture(token, user_id, report)
+            capture = BrowserCapture(token, user_id, report, expected_device=imported.unique_id)
             try:
                 async with async_playwright() as runtime:
                     report["phase"] = "browser_launch"
@@ -503,10 +508,10 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                         report["browser_version"] = browser.version
                         report["proxy_auth"] = bool(proxy_options and "username" in proxy_options)
                         context = await browser.new_context()
-                        await context.add_cookies([{
-                            "name": "auth-token", "value": token, "url": "https://www.twitch.tv/",
-                            "secure": True, "sameSite": "Lax",
-                        }])
+                        await context.add_cookies(imported.cookies)
+                        report["cookie_import"].update(check_imported_cookies(
+                            await context.cookies(WEB_URL), token, imported.unique_id,
+                        ))
                         context.on("request", capture.network.request)
                         context.on("response", capture.response)
                         context.on("requestfinished", capture.network.finished)
@@ -578,7 +583,7 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
         return 0, report
     except Exception as error:
         report["state"] = "failed"
-        report["error"] = str(error) if isinstance(error, ProbeFailure) else error_code(error)
+        report["error"] = str(error) if isinstance(error, (ProbeFailure, BrowserCookieError)) else error_code(error)
         return 1, report
 
 

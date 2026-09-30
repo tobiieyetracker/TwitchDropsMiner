@@ -111,7 +111,7 @@ def test_only_nonempty_string_tokens_can_be_correlated(body):
 
 
 def test_finalize_is_idempotent_clears_secrets_and_exports_only_safe_metadata():
-    audit = IntegrityAudit(OAUTH)
+    audit = IntegrityAudit(OAUTH, expected_device="fixture-device-secret")
     issuance, dashboard = {}, {}
     source = {**metadata(1), "url": "https://example.invalid/?secret=fixture-url-secret", "token": TOKEN_B}
     bad_times = {**metadata(2), "started_ms": "fixture-time-secret", "failed_ms": float("nan")}
@@ -119,6 +119,7 @@ def test_finalize_is_idempotent_clears_secrets_and_exports_only_safe_metadata():
     audit.observe_dashboard(dashboard, {**IDENTITY, "client-integrity": TOKEN_A}, bad_times)
     audit.finalize()
     assert audit._expected_token == ""
+    assert audit._expected_device is None
     assert audit._issuances == [] and audit._dashboards == []
     assert "url" not in issuance and "token" not in issuance
     assert "started_ms" not in dashboard and "failed_ms" not in dashboard
@@ -132,4 +133,4 @@ def test_finalize_is_idempotent_clears_secrets_and_exports_only_safe_metadata():
     output = json.dumps([issuance, dashboard, vars(audit)])
     assert "fixture-" not in output
     assert TOKEN_A not in output and TOKEN_B not in output and OAUTH not in output
-    assert "cookie" not in output and "proxy-authorization" not in output
+    assert '"cookie":' not in output and "proxy-authorization" not in output

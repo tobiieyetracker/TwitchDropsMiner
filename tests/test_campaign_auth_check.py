@@ -57,6 +57,17 @@ def test_empty_dashboard_is_a_success_but_wrong_user_is_not():
     assert not probe.accepted({"http_status": 200, **probe.dashboard_state(body, "43")})
 
 
+def test_import_check_requires_original_auth_and_device_without_exposing_them():
+    cookies = [{"name": "auth-token", "value": TOKEN}, {"name": "unique_id", "value": "fixture-device"}]
+    assert probe.check_imported_cookies(cookies, TOKEN, "fixture-device") == {
+        "browser_auth_matches": True, "browser_device_matches": True,
+    }
+    for cookie in cookies:
+        changed = [{**item, "value": "wrong"} if item is cookie else item for item in cookies]
+        with pytest.raises(probe.ProbeFailure, match="^browser_cookie_import_mismatch$"):
+            probe.check_imported_cookies(changed, TOKEN, "fixture-device")
+
+
 def test_capture_reports_resource_and_integrity_failures_without_secrets():
     async def scenario():
         report = {}
@@ -110,6 +121,41 @@ def test_capture_extracts_only_dashboard_from_batch_with_mutation():
         assert "cookie" not in headers and "proxy-authorization" not in headers
         await capture.close()
         assert capture.control is None and capture.token == ""
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_capture_checks_imported_device_before_python_handoff(matches):
+    async def scenario():
+        report = {}
+        capture = probe.BrowserCapture(TOKEN, "42", report, expected_device="fixture-device")
+        headers = {**HEADERS, "X-Device-Id": "fixture-device" if matches else "fixture-other-device"}
+        await capture.inspect(response({"token": INTEGRITY}, url="https://gql.twitch.tv/integrity", headers=headers))
+        await capture.inspect(response(SUCCESS, headers=headers))
+        assert capture.ready.is_set() is matches
+        assert report["integrity_responses"][0]["device_cookie_matches"] is matches
+        assert report["dashboard_responses"][0]["device_cookie_matches"] is matches
+        await capture.close()
+        assert capture.audit._expected_device is None
+        assert "fixture-" not in json.dumps(report)
+
+    asyncio.run(scenario())
+
+
+def test_unreadable_issuance_headers_do_not_imply_device_mismatch():
+    async def scenario():
+        report = {}
+        capture = probe.BrowserCapture(TOKEN, "42", report, expected_device="fixture-device")
+        reply = response({"token": INTEGRITY}, url="https://gql.twitch.tv/integrity")
+        reply.request.all_headers.side_effect = RuntimeError("fixture-sensitive-message")
+        await capture.inspect(reply)
+        issued = report["integrity_responses"][0]
+        assert issued["headers_state"] == "error"
+        assert issued["device_cookie_matches"] is None
+        assert issued["oauth_matches"] is None
+        await capture.close()
+        assert "fixture-" not in json.dumps(report)
 
     asyncio.run(scenario())
 
@@ -237,6 +283,8 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
         callbacks["requestfinished"](limited.request)
 
     async def navigate(*args, **kwargs):
+        context.add_cookies.assert_awaited_once()
+        assert context.cookies.await_count == 1  # import was verified before any navigation
         reply = response(DENIED if case == "denied" else SUCCESS, headers=headers)
         callbacks["request"](reply.request)
         callbacks["response"](reply)
@@ -247,10 +295,17 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
             await asyncio.Event().wait()
         await asyncio.sleep(0)
 
+    cookie_reads = 0
+
     async def cookies(*args):
-        if case == "cookie_rate_limit":
+        nonlocal cookie_reads
+        cookie_reads += 1
+        if case == "cookie_rate_limit" and cookie_reads > 1:
             rate_limit()
-        return [{"name": "auth-token", "value": "changed" if case == "changed_login" else TOKEN}]
+        return [
+            {"name": "auth-token", "value": "changed" if case == "changed_login" and cookie_reads > 1 else TOKEN},
+            {"name": "unique_id", "value": "fixture-device"},
+        ]
 
     page = SimpleNamespace(
         on=lambda event, callback: callbacks.update({event: callback}), goto=AsyncMock(side_effect=navigate),
@@ -306,7 +361,8 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
     async def scenario():
         path = tmp_path / "cookies.jar"
         jar = aiohttp.CookieJar()
-        jar.update_cookies({"auth-token": TOKEN}, URL("https://www.twitch.tv/"))
+        jar.update_cookies({"auth-token": TOKEN, "unique_id": "fixture-device"}, URL("https://www.twitch.tv/"))
+        jar.update_cookies({"unrelated": "fixture-unrelated"}, URL("https://other.example/"))
         jar.save(path)
         original = path.read_bytes()
         status, report = await asyncio.wait_for(probe.check(path, "chrome", proxy, 0.05), 2)
@@ -321,10 +377,14 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
             )
         if case not in {"wrong_issuer", "launch_failed"}:
             browser.new_context.assert_awaited_once_with()
-            context.add_cookies.assert_awaited_once_with([{
-                "name": "auth-token", "value": TOKEN, "url": "https://www.twitch.tv/",
-                "secure": True, "sameSite": "Lax",
-            }])
+            context.add_cookies.assert_awaited_once()
+            imported = context.add_cookies.await_args.args[0]
+            assert {item["name"]: item["value"] for item in imported} == {
+                "auth-token": TOKEN, "unique_id": "fixture-device",
+            }
+            assert all(item["domain"] == "www.twitch.tv" and item["path"] == "/" for item in imported)
+            assert report["cookie_import"]["browser_auth_matches"] is True
+            assert report["cookie_import"]["browser_device_matches"] is True
             browser.close.assert_awaited_once()
             if "rate_limit" in case:
                 page.evaluate.assert_not_awaited()

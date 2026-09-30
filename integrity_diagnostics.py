@@ -57,8 +57,9 @@ class _Observation:
 class IntegrityAudit:
     """Keep secrets in memory until all available responses can be correlated."""
 
-    def __init__(self, expected_token: str):
+    def __init__(self, expected_token: str, *, expected_device: str | None = None):
         self._expected_token = expected_token
+        self._expected_device = expected_device
         self._issuances: list[_Observation] = []
         self._dashboards: list[_Observation] = []
         self._closed = False
@@ -72,6 +73,10 @@ class IntegrityAudit:
         identity = _identity(headers)
         summary["oauth_matches"] = identity.get("authorization") == f"OAuth {self._expected_token}"
         summary["web_client_matches"] = identity.get("client-id") == WEB_CLIENT_ID
+        summary["device_cookie_matches"] = (
+            identity.get("x-device-id") == self._expected_device
+            if self._expected_device is not None else None
+        )
         token = _nonempty_string(body.get("token")) if isinstance(body, dict) else None
         self._issuances.append(_Observation(summary, identity, token, metadata))
 
@@ -80,6 +85,10 @@ class IntegrityAudit:
     ) -> None:
         if self._closed:
             return
+        state["device_cookie_matches"] = (
+            headers.get("x-device-id") == self._expected_device
+            if self._expected_device is not None else None
+        )
         self._dashboards.append(_Observation(
             state, _identity(headers), _nonempty_string(headers.get("client-integrity")),
             metadata,
@@ -124,5 +133,6 @@ class IntegrityAudit:
                 dashboard.output["integrity_matches"] = matches
         finally:
             self._expected_token = ""
+            self._expected_device = None
             self._issuances.clear()
             self._dashboards.clear()
