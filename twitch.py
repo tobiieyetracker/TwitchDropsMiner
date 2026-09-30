@@ -19,9 +19,19 @@ from yarl import URL
 from translate import _
 from gui import GUIManager
 from channel import Channel
+from campaign_discovery import (
+    merge_channel_campaign,
+    merge_inventory_campaign,
+    normalize_available_campaign,
+)
 from websocket import WebsocketPool
 from inventory import DropsCampaign
-from gql_recovery import CampaignAccessError, recover_challenges, validate_campaign_response
+from gql_recovery import (
+    CampaignAccessError,
+    CampaignAvailabilityUnknown,
+    recover_challenges,
+    validate_campaign_response,
+)
 from web_session import TwitchWebSession, WebCredentials
 from exceptions import (
     ExitRequest,
@@ -37,6 +47,7 @@ from utils import (
     CHARS_HEX_LOWER,
     chunk,
     timestamp,
+    Game,
     create_nonce,
     task_wrapper,
     RateLimiter,
@@ -59,7 +70,6 @@ from constants import (
 )
 
 if TYPE_CHECKING:
-    from utils import Game
     from gui import LoginForm
     from channel import Stream
     from settings import Settings
@@ -110,9 +120,8 @@ class _AuthState:
         if delete_cookies:
             session = self._twitch._session
             if session is not None:
-                jar = cast(aiohttp.CookieJar, session.cookie_jar)
-                jar.clear()
-                COOKIES_PATH.unlink(missing_ok=True)
+                cast(aiohttp.CookieJar, session.cookie_jar).clear()
+            self._twitch.cookie_path.unlink(missing_ok=True)
 
     def _apply_web_credentials(self, credentials: WebCredentials) -> None:
         first_login = not self._logged_in.is_set()
@@ -484,7 +493,7 @@ class _AuthState:
             login_form.update(_("gui", "login", "logged_in"), self.user_id)
             # update our cookie and save it
             jar.update_cookies(cookie, client_info.CLIENT_URL)
-            jar.save(COOKIES_PATH)
+            jar.save(self._twitch.cookie_path)
         self._twitch.gui.help._invalidate_button.config(state="normal")
         self._logged_in.set()
 
@@ -504,10 +513,18 @@ class Twitch:
         # Do not modify the default, safe values.
         self._qgl_limiter = RateLimiter(capacity=5, window=1)
         # Client type, session and auth
-        self._client_type: ClientInfo = ClientType.ANDROID_APP
+        self._client_type: ClientInfo = (
+            ClientType.SMARTBOX
+            if getattr(settings, "smartbox_auth", False) else ClientType.ANDROID_APP
+        )
+        self._cookie_path = (
+            COOKIES_PATH.with_name("cookies.smartbox.jar")
+            if self._client_type is ClientType.SMARTBOX else COOKIES_PATH
+        )
         self._web_session: TwitchWebSession | None = None
         if getattr(settings, "browser_auth", False):
             self._client_type = ClientType.WEB
+            self._cookie_path = COOKIES_PATH
             self._web_session = TwitchWebSession(
                 channel=getattr(settings, "browser_channel", None),
                 proxy=str(settings.proxy) if settings.proxy else "", notify=self.print,
@@ -534,8 +551,8 @@ class Twitch:
         # load in cookies
         cookie_jar = aiohttp.CookieJar()
         try:
-            if self._web_session is None and COOKIES_PATH.exists():
-                cookie_jar.load(COOKIES_PATH)
+            if self._web_session is None and self.cookie_path.exists():
+                cookie_jar.load(self.cookie_path)
         except Exception:
             # if loading in the cookies file ends up in an error, just ignore it
             # clear the jar, just in case
@@ -583,7 +600,7 @@ class Twitch:
             # Failed authentication must not overwrite the saved login during
             # cleanup, even if a page response changed the in-memory cookie jar.
             if self._web_session is None and self._auth_state._logged_in.is_set():
-                cookie_jar.save(COOKIES_PATH)
+                cookie_jar.save(self.cookie_path)
             await self._session.close()
             self._session = None
         if self._web_session is not None:
@@ -597,6 +614,11 @@ class Twitch:
         # wait at least half a second + whatever it takes to complete the closing
         # this allows aiohttp to safely close the session
         await asyncio.sleep(start_time + 0.5 - time())
+
+    @property
+    def cookie_path(self):
+        """Return the active client cookie file; preserve WEB and TV sessions separately."""
+        return getattr(self, "_cookie_path", COOKIES_PATH)
 
     def wait_until_login(self) -> abc.Coroutine[Any, Any, Literal[True]]:
         return self._auth_state._logged_in.wait()
@@ -822,6 +844,7 @@ class Twitch:
                 # NOTE: we use another set so that we can set them online separately
                 no_acl: set[Game] = set()
                 acl_channels: set[Channel] = set()
+                source_campaigns: list[DropsCampaign] = []
                 next_hour = datetime.now(timezone.utc) + timedelta(hours=1)
                 for campaign in self.inventory:
                     if (
@@ -832,6 +855,16 @@ class Twitch:
                             acl_channels.update(campaign.allowed_channels)
                         else:
                             no_acl.add(campaign.game)
+                            if campaign.discovery_sources:
+                                source_campaigns.append(campaign)
+                source_channels = self._campaign_source_channels(source_campaigns)
+                source_channels.difference_update(new_channels)
+                if source_channels:
+                    # Add the exact live channels that exposed these drops.
+                    # This matters for broadcaster-specific drops outside the
+                    # directory's top results for the game.
+                    await self.bulk_check_online(source_channels)
+                    new_channels.update(source_channels)
                 # remove all ACL channels that already exist from the other set
                 acl_channels.difference_update(new_channels)
                 # use the other set to set them online if possible
@@ -904,7 +937,7 @@ class Twitch:
                     if self.can_watch(channel):
                         if (
                             (active_campaign := self.get_active_campaign(channel)) is not None
-                            and (active_drop := active_campaign.first_drop) is not None
+                            and (active_drop := active_campaign.first_drop_for(channel)) is not None
                         ):
                             active_drop.display(countdown=False, subone=True)
                         break
@@ -1025,7 +1058,7 @@ class Twitch:
                         active_campaign.bump_minutes(channel)
                         # NOTE: This usually gets overwritten below
                         drop_text = f"Unknown drop ({active_campaign.game})"
-                        if (active_drop := active_campaign.first_drop) is not None:
+                        if (active_drop := active_campaign.first_drop_for(channel)) is not None:
                             active_drop.display()
                             drop_text = (
                                 f"{active_drop.name} ({active_drop.campaign.game}, "
@@ -1517,6 +1550,170 @@ class Twitch:
         }
         return self._merge_data(campaign_ids, fetched_data)
 
+    def _campaign_discovery_games(self) -> list[str]:
+        """Return the explicit game allowlist for a bounded channel scan."""
+        requested = getattr(self.settings, "campaign_game", None) or []
+        if not requested:
+            requested = getattr(self.settings, "priority", [])
+        names: list[str] = []
+        slugs: set[str] = set()
+        for name in requested:
+            if not isinstance(name, str) or not name.strip():
+                continue
+            slug = Game({"id": 0, "name": name.strip()}).slug
+            if slug and slug not in slugs:
+                names.append(name.strip())
+                slugs.add(slug)
+        return names
+
+    def _campaign_discovery_channels(self) -> list[str]:
+        """Return explicitly requested channel logins for a bounded fallback."""
+        requested = getattr(self.settings, "campaign_channel", None) or []
+        logins: list[str] = []
+        seen: set[str] = set()
+        for login in requested:
+            if not isinstance(login, str) or not login.strip():
+                continue
+            normalized = login.strip().lstrip("@").casefold()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                logins.append(normalized)
+        return logins
+
+    async def _discover_campaigns_from_channels(
+        self, game_names: list[str], channel_logins: list[str] | None = None
+    ) -> tuple[dict[str, JsonType], int, int]:
+        """Discover partial candidates via configured games and exact channels."""
+        channels_by_id: dict[int, Channel] = {}
+        # Exact channels are useful when an event is tied to one broadcaster or
+        # the target streamer is outside the game's top directory results.
+        exact_logins = list(dict.fromkeys(channel_logins or []))
+        if exact_logins:
+            stream_ops = [
+                GQL_QUERIES["GetStreamInfo"].with_variables({"channel": login})
+                for login in exact_logins
+            ]
+            for offset in range(0, len(stream_ops), 20):
+                responses = await self.gql_request(stream_ops[offset:offset + 20])
+                for login, response in zip(exact_logins[offset:offset + 20], responses):
+                    user = (response.get("data") or {}).get("user")
+                    if not isinstance(user, dict) or not str(user.get("id", "")).isdigit():
+                        raise CampaignAccessError(
+                            f"Twitch did not resolve the requested campaign channel {login}."
+                        )
+                    channel = Channel(
+                        self,
+                        id=user["id"],
+                        login=user.get("login") or login,
+                        display_name=user.get("displayName"),
+                    )
+                    if user.get("stream") is not None:
+                        channel.external_update(user, [])
+                    channels_by_id.setdefault(channel.id, channel)
+
+        for game_name in game_names:
+            game_slug = Game({"id": 0, "name": game_name}).slug
+            streams = await self._get_live_streams_by_slug(
+                game_slug, limit=10, drops_enabled=True
+            )
+            for channel in streams:
+                channels_by_id.setdefault(channel.id, channel)
+
+        if not channels_by_id:
+            return {}, 0, 0
+
+        channel_list = list(channels_by_id.values())
+        candidates: dict[str, JsonType] = {}
+        attempted_channels = 0
+        unavailable_channels = 0
+        for channel in channel_list:
+            attempted_channels += 1
+            operation = GQL_QUERIES["AvailableDrops"].with_variables(
+                {"channelID": str(channel.id)}
+            )
+            try:
+                response = await self.gql_request(operation)
+            except CampaignAvailabilityUnknown:
+                # One channel returning an unknown/null value must not erase
+                # candidates already read from other channels. Integrity or
+                # interactive challenges still stop the scan.
+                unavailable_channels += 1
+                continue
+
+            channel_data = (response.get("data") or {}).get("channel")
+            if not isinstance(channel_data, dict):
+                raise CampaignAccessError(
+                    "Twitch returned an unexpected channel during campaign discovery."
+                )
+            if str(channel_data.get("id", "")) != str(channel.id):
+                raise CampaignAccessError(
+                    "Twitch returned an unexpected channel during campaign discovery."
+                )
+            campaigns = channel_data["viewerDropCampaigns"]
+            game = channel.game
+            game_data = (
+                {"id": str(game.id), "name": game.name, "displayName": game.name}
+                if game is not None else None
+            )
+            observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+                "+00:00", "Z"
+            )
+            for raw_campaign in campaigns:
+                if not isinstance(raw_campaign, dict):
+                    continue
+                candidate_game = game_data or raw_campaign.get("game")
+                if not isinstance(candidate_game, dict):
+                    continue
+                candidate = normalize_available_campaign(
+                    raw_campaign,
+                    channel_id=channel.id,
+                    channel_login=channel._login,
+                    game=candidate_game,
+                    observed_at=observed_at,
+                )
+                if candidate is None or candidate["status"] not in ("ACTIVE", "UPCOMING"):
+                    continue
+                campaign_id = candidate["id"]
+                if campaign_id in candidates:
+                    candidates[campaign_id] = merge_channel_campaign(
+                        candidates[campaign_id], candidate
+                    )
+                else:
+                    candidates[campaign_id] = candidate
+        return candidates, attempted_channels, unavailable_channels
+
+    def _merge_channel_candidates(
+        self,
+        inventory_data: dict[str, JsonType],
+        candidates: dict[str, JsonType],
+    ) -> None:
+        for campaign_id, candidate in candidates.items():
+            if campaign_id in inventory_data:
+                inventory_data[campaign_id] = merge_inventory_campaign(
+                    inventory_data[campaign_id], candidate
+                )
+            else:
+                inventory_data[campaign_id] = candidate
+
+    def _campaign_source_channels(
+        self, campaigns: abc.Iterable[DropsCampaign]
+    ) -> set[Channel]:
+        """Build watch candidates from channels that exposed a campaign/drop."""
+        result: set[Channel] = set()
+        for campaign in campaigns:
+            if campaign.allowed_channels:
+                # Twitch's account-scoped allow list takes precedence.
+                continue
+            for source in campaign.discovery_sources:
+                if not isinstance(source, dict):
+                    continue
+                channel_id = source.get("channel_id")
+                login = source.get("channel_login")
+                if not str(channel_id or "").isdigit() or not isinstance(login, str) or not login:
+                    continue
+                result.add(Channel(self, id=int(channel_id), login=login))
+        return result
+
     async def fetch_inventory(self) -> None:
         status_update = self.gui.status.update
         status_update(_("gui", "status", "fetching_inventory"))
@@ -1530,32 +1727,76 @@ class Twitch:
         }
         inventory_data: dict[str, JsonType] = {c["id"]: c for c in ongoing_campaigns}
         ongoing_ids = set(inventory_data)
-        # fetch general available campaigns data (campaigns)
-        response = await self.gql_request(GQL_QUERIES["Campaigns"])
-        # gql_request distinguishes a real empty list from a rejected/null response.
-        available_list: list[JsonType] = response["data"]["currentUser"]["dropCampaigns"]
-        applicable_statuses = ("ACTIVE", "UPCOMING")
-        available_campaigns: dict[str, JsonType] = {
-            c["id"]: c
-            for c in available_list
-            if c["status"] in applicable_statuses  # that are currently not expired
-        }
-        # fetch detailed data for each campaign, in chunks
-        status_update(_("gui", "status", "fetching_campaigns"))
-        fetch_campaigns_tasks: list[asyncio.Task[Any]] = [
-            asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
-            for campaigns_chunk in chunk(available_campaigns.items(), 20)
-        ]
-        try:
-            for coro in asyncio.as_completed(fetch_campaigns_tasks):
-                chunk_campaigns_data = await coro
-                # merge the inventory and campaigns datas together
-                inventory_data = self._merge_data(inventory_data, chunk_campaigns_data)
-        except Exception:
-            # asyncio.as_completed doesn't cancel tasks on errors
-            for task in fetch_campaigns_tasks:
-                task.cancel()
-            raise
+        available_list: list[JsonType] = []
+        channel_candidates: dict[str, JsonType] = {}
+        attempted_channels = 0
+        unavailable_channels = 0
+        discovery_games = self._campaign_discovery_games()
+        discovery_channels = self._campaign_discovery_channels()
+        smartbox_client = self._client_type.CLIENT_ID == ClientType.SMARTBOX.CLIENT_ID
+        dashboard_available = not smartbox_client
+
+        if smartbox_client:
+            # Twitch for TV sessions do not expose ViewerDropsDashboard or
+            # DropCampaignDetails. Use the upstream-proven channel-first path.
+            if discovery_games or discovery_channels:
+                self.print(
+                    "SMARTBOX campaign discovery scans configured games and explicit "
+                    "channels only; the result is partial and is not a full campaign list."
+                )
+                channel_candidates, attempted_channels, unavailable_channels = (
+                    await self._discover_campaigns_from_channels(
+                        discovery_games, discovery_channels
+                    )
+                )
+            else:
+                self.print(
+                    "SMARTBOX does not provide the campaign dashboard. Set --campaign-game, "
+                    "--campaign-channel, or add games to Priority for limited channel discovery."
+                )
+        else:
+            try:
+                response = await self.gql_request(GQL_QUERIES["Campaigns"])
+            except CampaignAccessError:
+                if not discovery_games and not discovery_channels:
+                    raise
+                dashboard_available = False
+                self.print(
+                    "Campaign dashboard is unavailable; scanning configured games and explicit "
+                    "channels. This fallback is partial and cannot guarantee full coverage."
+                )
+                channel_candidates, attempted_channels, unavailable_channels = (
+                    await self._discover_campaigns_from_channels(
+                        discovery_games, discovery_channels
+                    )
+                )
+            else:
+                # gql_request distinguishes a real empty list from a rejected/null response.
+                available_list = response["data"]["currentUser"]["dropCampaigns"]
+                applicable_statuses = ("ACTIVE", "UPCOMING")
+                available_campaigns: dict[str, JsonType] = {
+                    c["id"]: c
+                    for c in available_list
+                    if c["status"] in applicable_statuses
+                }
+                # Fetch detailed data for each dashboard campaign in chunks.
+                status_update(_("gui", "status", "fetching_campaigns"))
+                fetch_campaigns_tasks: list[asyncio.Task[Any]] = [
+                    asyncio.create_task(self.fetch_campaigns(campaigns_chunk))
+                    for campaigns_chunk in chunk(available_campaigns.items(), 20)
+                ]
+                try:
+                    for coro in asyncio.as_completed(fetch_campaigns_tasks):
+                        chunk_campaigns_data = await coro
+                        inventory_data = self._merge_data(inventory_data, chunk_campaigns_data)
+                except Exception:
+                    # asyncio.as_completed doesn't cancel tasks on errors.
+                    for task in fetch_campaigns_tasks:
+                        task.cancel()
+                    raise
+
+        if channel_candidates:
+            self._merge_channel_candidates(inventory_data, channel_candidates)
         # filter out invalid campaigns
         for campaign_id in list(inventory_data.keys()):
             if inventory_data[campaign_id]["game"] is None:
@@ -1643,11 +1884,23 @@ class Twitch:
         self._mnt_task = None
         if getattr(self.settings, "check_campaigns", False):
             new_ids = {c.id for c in campaigns} - ongoing_ids
-            linked = sum(c.linked for c in campaigns)
+            linked = sum(c.linked is True for c in campaigns)
+            unlinked = sum(c.linked is False for c in campaigns)
+            unknown_link = sum(c.linked is None for c in campaigns)
+            if dashboard_available:
+                campaign_source = f"{len(available_list)} on dashboard"
+            else:
+                campaign_source = (
+                    f"{len(channel_candidates)} from a partial channel scan "
+                    f"({attempted_channels} channel queries sent across "
+                    f"{len(discovery_channels)} explicit channels and "
+                    f"{len(discovery_games)} configured games; "
+                    f"{unavailable_channels} availability results unknown)"
+                )
             self.print(
-                f"Campaign sources: {len(ongoing_ids)} in progress, "
-                f"{len(available_list)} on dashboard, {len(new_ids)} newly discovered. "
-                f"Account links: {linked} connected, {len(campaigns) - linked} not connected."
+                f"Campaign sources: {len(ongoing_ids)} in progress, {campaign_source}, "
+                f"{len(new_ids)} newly discovered. Account links: {linked} connected, "
+                f"{unlinked} not connected, {unknown_link} unknown."
             )
         else:
             self._mnt_task = asyncio.create_task(self._maintenance_task())
@@ -1671,6 +1924,13 @@ class Twitch:
     async def get_live_streams(
         self, game: Game, *, limit: int = 20, drops_enabled: bool = True
     ) -> list[Channel]:
+        return await self._get_live_streams_by_slug(
+            game.slug, limit=limit, drops_enabled=drops_enabled
+        )
+
+    async def _get_live_streams_by_slug(
+        self, slug: str, *, limit: int, drops_enabled: bool
+    ) -> list[Channel]:
         filters: list[str] = []
         if drops_enabled:
             filters.append("DROPS_ENABLED")
@@ -1678,7 +1938,7 @@ class Twitch:
             response = await self.gql_request(
                 GQL_QUERIES["GameDirectory"].with_variables({
                     "limit": limit,
-                    "slug": game.slug,
+                    "slug": slug,
                     "options": {
                         "includeRestricted": ["SUB_ONLY_LIVE"],
                         "systemFilters": filters,
@@ -1686,7 +1946,7 @@ class Twitch:
                 })
             )
         except GQLException as exc:
-            raise MinerException(f"Game: {game.slug}") from exc
+            raise MinerException(f"Game: {slug}") from exc
         if "game" in response["data"]:
             return [
                 Channel.from_directory(

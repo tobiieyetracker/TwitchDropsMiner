@@ -142,6 +142,21 @@ def test_saved_web_token_offers_chrome_without_overwriting_cookies(cookie_path):
     asyncio.run(scenario())
 
 
+def test_web_session_invalidation_preserves_the_device_cookie_file(cookie_path):
+    async def scenario():
+        client = saved_client(cookie_path, [])
+        original = cookie_path.read_bytes()
+        web_session = SimpleNamespace(invalidate=Mock())
+        client._web_session = web_session
+
+        client._auth_state.invalidate(delete_cookies=True)
+
+        web_session.invalidate.assert_called_once_with()
+        assert cookie_path.read_bytes() == original
+
+    asyncio.run(scenario())
+
+
 def test_matching_saved_login_is_used_and_cookies_still_saved_at_shutdown(cookie_path):
     async def scenario():
         client = saved_client(cookie_path, [valid_token()])

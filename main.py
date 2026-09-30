@@ -71,6 +71,9 @@ if __name__ == "__main__":
         browser_auth: bool
         browser_channel: str | None
         check_campaigns: bool
+        smartbox_auth: bool
+        campaign_game: list[str]
+        campaign_channel: list[str]
 
         # TODO: replace int with union of literal values once typeshed updates
         @property
@@ -117,15 +120,33 @@ if __name__ == "__main__":
     parser.add_argument("--dump", action="store_true")
     parser.add_argument(
         "--browser-auth", action="store_true",
-        help="Sign in using an isolated Twitch browser session (requires requirements-browser.txt)",
+        help="Sign in using Twitch in Chrome (Windows uses the normal profile and a Chrome extension)",
     )
     parser.add_argument(
         "--browser-channel", choices=("chrome", "msedge", "chromium"), default=None,
-        help="Browser for --browser-auth (default: Edge on Windows, Chrome elsewhere)",
+        help="Browser for --browser-auth (Windows Chrome uses the profile extension; other choices use Playwright)",
     )
     parser.add_argument(
         "--check-campaigns", action="store_true",
         help="Fetch campaigns once without starting streams or claiming drops",
+    )
+    parser.add_argument(
+        "--smartbox-auth", action="store_true",
+        help="Use Twitch for TV device login and its matching SMARTBOX request identity",
+    )
+    parser.add_argument(
+        "--campaign-game", action="append", default=[], metavar="GAME",
+        help=(
+            "Game name to scan through live-channel AvailableDrops when the dashboard "
+            "is unavailable; may be repeated. This is a limited channel scan."
+        ),
+    )
+    parser.add_argument(
+        "--campaign-channel", action="append", default=[], metavar="LOGIN",
+        help=(
+            "Also query AvailableDrops for this exact channel when the dashboard is "
+            "unavailable; may be repeated. This adds coverage only for these channels."
+        ),
     )
     # undocumented debug args
     parser.add_argument(

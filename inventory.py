@@ -48,11 +48,11 @@ class Benefit:
         self.id: str = benefit_data["id"]
         self.name: str = benefit_data["name"]
         self.type: BenefitType = (
-            BenefitType(benefit_data["distributionType"])
-            if benefit_data["distributionType"] in BenefitType.__members__.keys()
+            BenefitType(benefit_data.get("distributionType", "UNKNOWN"))
+            if benefit_data.get("distributionType", "UNKNOWN") in BenefitType.__members__.keys()
             else BenefitType.UNKNOWN
         )
-        self.image_url: URLType = benefit_data["imageAssetURL"]
+        self.image_url: URLType = benefit_data.get("imageAssetURL", "")
 
 
 class BaseDrop:
@@ -64,8 +64,8 @@ class BaseDrop:
         self.name: str = data["name"]
         self.campaign: DropsCampaign = campaign
         self.benefits: list[Benefit] = [Benefit(b) for b in (data["benefitEdges"] or [])]
-        self.starts_at: datetime = timestamp(data["startAt"])
-        self.ends_at: datetime = timestamp(data["endAt"])
+        self.starts_at: datetime = timestamp(data.get("startAt", campaign.start_at_raw))
+        self.ends_at: datetime = timestamp(data.get("endAt", campaign.end_at_raw))
         self.claim_id: str | None = None
         self.is_claimed: bool = False
         if "self" in data:
@@ -136,6 +136,8 @@ class BaseDrop:
         self, channel: Channel | None = None, ignore_channel_status: bool = False
     ) -> bool:
         return (
+            self.campaign.drop_available_on(self.id, channel)
+            and
             self._base_can_earn() and self.campaign._base_can_earn(channel, ignore_channel_status)
         )
 
@@ -343,19 +345,42 @@ class DropsCampaign:
         self.id: str = data["id"]
         self.name: str = data["name"]
         self.game: Game = Game(data["game"])
-        self.linked: bool = data["self"]["isAccountConnected"]
-        self.link_url: str = data["accountLinkURL"]
+        self.linked: bool | None = (
+            data["self"].get("isAccountConnected")
+            if isinstance(data.get("self"), dict) else None
+        )
+        self.link_url: str = data.get("accountLinkURL") or ""
         # campaign's image actually comes from the game object
         # we use regex to get rid of the dimensions part (ex. ".../game_id-285x380.jpg")
-        self.image_url: URLType = remove_dimensions(data["game"]["boxArtURL"])
+        self.image_url: URLType = remove_dimensions(data["game"].get("boxArtURL", ""))
         self.starts_at: datetime = timestamp(data["startAt"])
         self.ends_at: datetime = timestamp(data["endAt"])
+        self.start_at_raw: str = data["startAt"]
+        self.end_at_raw: str = data["endAt"]
         self._valid: bool = data["status"] != "EXPIRED"
-        allowed: JsonType = data["allow"]
+        allowed: JsonType = data.get("allow", {"channels": [], "isEnabled": False})
         self.allowed_channels: list[Channel] = (
             [Channel.from_acl(twitch, channel_data) for channel_data in allowed["channels"]]
             if allowed["channels"] and allowed.get("isEnabled", True) else []
         )
+        discovery: JsonType = data.get("_discovery", {})
+        self.discovery_sources: list[JsonType] = discovery.get("sources", [])
+        self.discovery_conflicts: list[JsonType] = discovery.get("conflicts", [])
+        self.drop_source_channels: dict[str, set[int]] = {
+            drop_id: {
+                int(source["channel_id"])
+                for source in sources
+                if isinstance(source, dict)
+                and str(source.get("channel_id", "")).isdigit()
+            }
+            for drop_id, sources in discovery.get("drop_sources", {}).items()
+            if isinstance(sources, list)
+        }
+        self.discovery_channel_logins: list[str] = list(dict.fromkeys(
+            source["channel_login"]
+            for source in self.discovery_sources
+            if isinstance(source, dict) and isinstance(source.get("channel_login"), str)
+        ))
         self.timed_drops: dict[str, TimedDrop] = {
             drop_data["id"]: TimedDrop(self, drop_data, claimed_benefits)
             for drop_data in data["timeBasedDrops"]
@@ -397,7 +422,9 @@ class DropsCampaign:
     def eligible(self) -> bool:
         if self.has_badge_or_emote:
             return self._twitch.settings.enable_badges_emotes
-        return self.linked
+        # A channel-scoped public candidate has no account self edge. Keep it
+        # visible and mineable as a candidate, but do not label it linked.
+        return self.linked is not False
 
     @cached_property
     def has_badge_or_emote(self) -> bool:
@@ -440,6 +467,19 @@ class DropsCampaign:
             key=lambda d: d.remaining_minutes,
         )
         return drops[0] if drops else None
+
+    def first_drop_for(self, channel: Channel) -> TimedDrop | None:
+        """Return the best earnable drop that this observed source can serve."""
+        drops = sorted(
+            (drop for drop in self.drops if drop.can_earn(channel)),
+            key=lambda drop: drop.remaining_minutes,
+        )
+        return drops[0] if drops else None
+
+    def drop_available_on(self, drop_id: str, channel: Channel | None) -> bool:
+        if channel is None or drop_id not in self.drop_source_channels:
+            return True
+        return channel.id in self.drop_source_channels[drop_id]
 
     def _update_real_minutes(self, delta: int) -> None:
         for drop in self.drops:
@@ -484,7 +524,10 @@ class DropsCampaign:
         # True if any of the containing drops can be earned
         return (
             self._base_can_earn(channel, ignore_channel_status)
-            and any(drop._base_can_earn() for drop in self.drops)
+            and any(
+                drop._base_can_earn() and self.drop_available_on(drop.id, channel)
+                for drop in self.drops
+            )
         )
 
     def can_earn_within(self, stamp: datetime) -> bool:

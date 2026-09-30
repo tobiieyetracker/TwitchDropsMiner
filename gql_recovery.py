@@ -26,6 +26,10 @@ class CampaignAccessError(GQLException):
     pass
 
 
+class CampaignAvailabilityUnknown(CampaignAccessError):
+    """Twitch returned no usable AvailableDrops value for one channel."""
+
+
 def _as_list(payload: Payload, count: int) -> list[Json]:
     items = payload if isinstance(payload, list) else [payload]
     if len(items) != count or not all(isinstance(item, dict) for item in items):
@@ -62,7 +66,7 @@ def _validate_available_drops(response: Json) -> None:
         raise CampaignAccessError("Twitch's AvailableDrops response schema has changed")
     channel = data["channel"]
     if channel is None:
-        raise CampaignAccessError(
+        raise CampaignAvailabilityUnknown(
             "Twitch returned no channel for AvailableDrops. "
             "Channel drop availability is unknown."
         )
@@ -70,7 +74,7 @@ def _validate_available_drops(response: Json) -> None:
         raise CampaignAccessError("Twitch's AvailableDrops response schema has changed")
     campaigns = channel["viewerDropCampaigns"]
     if campaigns is None:
-        raise CampaignAccessError(
+        raise CampaignAvailabilityUnknown(
             "Twitch returned null for AvailableDrops.viewerDropCampaigns. "
             "Channel drop availability is unknown; this is not an empty campaign list."
         )
@@ -133,8 +137,9 @@ async def recover_challenges(
     if refresh is None:
         raise CampaignAccessError(
             "Twitch requires a web integrity session for campaign discovery. "
-            "Start the miner with --browser-auth; changing the query hash or "
-            "switching to SMARTBOX does not provide that session."
+            "Start the miner with --browser-auth for dashboard coverage, or use "
+            "--smartbox-auth with --campaign-game or --campaign-channel values for a "
+            "limited live-channel fallback. Changing the query hash does not provide integrity."
         )
     await refresh()
     retried = _as_list(await replay([ops[index] for index in pending]), len(pending))

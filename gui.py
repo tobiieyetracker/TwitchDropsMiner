@@ -1431,7 +1431,16 @@ class InventoryOverview:
             takefocus=False,
         ).grid(column=1, row=2, sticky="w", padx=4)
         # Linking status
-        if campaign.eligible:
+        if campaign.linked is None:
+            unknown_link = {
+                "简体中文": "账户关联状态未知 ⚠",
+                "繁體中文": "帳戶連結狀態未知 ⚠",
+            }.get(_.current, "Link status unknown ⚠")
+            link_kwargs = {
+                "text": unknown_link,
+                "foreground": "goldenrod",
+            }
+        elif campaign.eligible:
             link_kwargs = {
                 "style": '',
                 "text": _("gui", "inventory", "status", "linked"),
@@ -1459,6 +1468,20 @@ class InventoryOverview:
                 allowed_text += (
                     f"\n{_('gui', 'inventory', 'and_more').format(amount=len(acl) - 4)}"
                 )
+        elif campaign.discovery_channel_logins:
+            discovered = campaign.discovery_channel_logins
+            if len(discovered) <= 5:
+                allowed_text = '\n'.join(discovered)
+            else:
+                allowed_text = '\n'.join(discovered[:4])
+                allowed_text += (
+                    f"\n{_('gui', 'inventory', 'and_more').format(amount=len(discovered) - 4)}"
+                )
+            partial_note = {
+                "简体中文": "仅为观测来源，不是完整频道限制",
+                "繁體中文": "僅為觀察來源，並非完整頻道限制",
+            }.get(_.current, "Observed sources only; not the full allow list")
+            allowed_text += f"\n{partial_note}"
         else:
             allowed_text = _("gui", "inventory", "all_channels")
         ttk.Label(

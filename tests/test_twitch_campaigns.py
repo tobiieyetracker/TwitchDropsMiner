@@ -10,6 +10,7 @@ from constants import ClientInfo, ClientType, GQL_QUERIES
 from gql_recovery import CampaignAccessError
 from twitch import Twitch, _AuthState
 from web_session import WebCredentials
+from campaign_discovery import normalize_available_campaign
 
 
 async def passthrough(coro):
@@ -18,6 +19,8 @@ async def passthrough(coro):
 
 def bare_client():
     client = Twitch.__new__(Twitch)
+    client.settings = SimpleNamespace(check_campaigns=False)
+    client._client_type = ClientType.ANDROID_APP
     client.gui = SimpleNamespace(
         coro_unless_closed=passthrough, status=SimpleNamespace(update=Mock()),
         inv=SimpleNamespace(clear=Mock(), add_campaign=AsyncMock()), close_requested=False,
@@ -27,6 +30,93 @@ def bare_client():
     )
     client._web_session = SimpleNamespace(refresh_integrity=AsyncMock())
     return client
+
+
+def channel_campaign_candidate():
+    raw = {
+        "id": "channel-campaign", "name": "Channel candidate",
+        "startAt": "2020-01-01T00:00:00Z", "endAt": "2099-01-01T00:00:00Z",
+        "game": {"id": "263490", "name": "Rust"},
+        "timeBasedDrops": [{
+            "id": "channel-drop", "name": "Channel drop",
+            "requiredMinutesWatched": 60,
+            "benefitEdges": [{"benefit": {
+                "id": "reward", "name": "Reward", "imageAssetURL": "",
+            }}],
+        }],
+    }
+    return normalize_available_campaign(
+        raw, channel_id="123", channel_login="rainbow6",
+        game={"id": "263490", "name": "Rust"}, observed_at="2026-10-01T00:00:00Z",
+    )
+
+
+def test_explicit_campaign_channels_are_normalized_and_deduplicated():
+    client = Twitch.__new__(Twitch)
+    client.settings = SimpleNamespace(campaign_channel=[
+        " Rainbow6 ", "@rainbow6", "", "@Ubisoft", None,
+    ])
+
+    assert client._campaign_discovery_channels() == ["rainbow6", "ubisoft"]
+
+
+@pytest.mark.parametrize("smartbox", [False, True], ids=["dashboard-fallback", "smartbox"])
+def test_campaign_discovery_falls_back_to_configured_channel_scan(smartbox, capsys):
+    client = bare_client()
+    client.settings = SimpleNamespace(
+        dump=False, enable_badges_emotes=False, check_campaigns=True,
+        priority=["Rust"], campaign_game=[],
+    )
+    client._drops, client._campaigns, client.inventory = {}, {}, []
+    client._mnt_triggers, client._mnt_task = deque(), None
+    client.get_auth = AsyncMock(return_value=SimpleNamespace(user_id=42))
+    client._client_type = ClientType.SMARTBOX if smartbox else ClientType.ANDROID_APP
+    client._discover_campaigns_from_channels = AsyncMock(
+        return_value=({"channel-campaign": channel_campaign_candidate()}, 1, 0)
+    )
+    operations = []
+
+    async def send(operation):
+        operations.append(operation["operationName"])
+        if operation["operationName"] == "Inventory":
+            return {"data": {"currentUser": {"inventory": {
+                "dropCampaignsInProgress": [], "gameEventDrops": [],
+            }}}}
+        raise CampaignAccessError("dashboard denied")
+
+    client.gql_request = AsyncMock(side_effect=send)
+    asyncio.run(client.fetch_inventory())
+
+    client._discover_campaigns_from_channels.assert_awaited_once_with(["Rust"], [])
+    assert [campaign.id for campaign in client.inventory] == ["channel-campaign"]
+    assert client.inventory[0].linked is None
+    assert client.inventory[0].discovery_channel_logins == ["rainbow6"]
+    assert "partial" in capsys.readouterr().out
+    if smartbox:
+        assert operations == ["Inventory"]
+    else:
+        assert operations == ["Inventory", "ViewerDropsDashboard"]
+
+
+def test_dashboard_failure_without_configured_games_remains_an_error():
+    client = bare_client()
+    client.settings = SimpleNamespace(
+        dump=False, enable_badges_emotes=False, check_campaigns=False, priority=[],
+    )
+    client.get_auth = AsyncMock(return_value=SimpleNamespace(user_id=42))
+
+    async def send(operation):
+        if operation["operationName"] == "Inventory":
+            return {"data": {"currentUser": {"inventory": {
+                "dropCampaignsInProgress": [], "gameEventDrops": [],
+            }}}}
+        raise CampaignAccessError("dashboard denied")
+
+    client.gql_request = AsyncMock(side_effect=send)
+    client._discover_campaigns_from_channels = AsyncMock()
+    with pytest.raises(CampaignAccessError, match="dashboard denied"):
+        asyncio.run(client.fetch_inventory())
+    client._discover_campaigns_from_channels.assert_not_awaited()
 
 
 @pytest.mark.parametrize("check_campaigns", [False, True])
