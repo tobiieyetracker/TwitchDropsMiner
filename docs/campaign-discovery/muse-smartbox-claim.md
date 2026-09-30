@@ -46,6 +46,28 @@ DISPLAY=:99 python check_smartbox_awards.py --cookies cookies.jar.bak --proxy-en
 仍不足以排除共享 benefit 或其他客户端领取的归因歧义。
 未知、null、缺失、过旧或未来时间都不能认定本次已授予。
 
+### e4b3cb3 实测结果：已有奖励，不能归因本次
+
+本机干净副本中，38 项新核对测试和 40 项 SMARTBOX 领取测试共 78 项通过。
+Muse 同步 `e4b3cb3ed1f00bfafc4564974a4b606518014aed` 后，38 项新增测试通过，
+仅执行一次只读核对，报告为 `probe-reports/smartbox-awards-e4b3cb3-20261001-020800.json`。
+以下为 Codex 直接读取 Muse 会话回报的结果，完整 JSON 仍保存在 Muse：
+
+- 退出码 1、`reward_grant_unconfirmed`，`error:null`，同账号及 SMARTBOX token 验证通过。
+- 原目标仍不在 `dropCampaignsInProgress` 中。所映射 benefit 确实存在于本账号的
+  `Inventory.gameEventDrops`，`lastAwardedAt` 为 `2026-09-30T13:02:08Z`。
+- 该时间早于 SMARTBOX 尝试的 `2026-09-30T17:57:56Z`；核对时间为同日
+  `18:08:03Z`。因此 `within_attempt_window:false`，没有将已有奖励误认成这次新增。
+- 仅 validation 与 Inventory 两次 HTTP 200。未领取、未观看、未写 journal，
+  Muse 报告两份 Cookie 及原、WEB、SMARTBOX 三份 journal 的 hash 前后相同。
+
+本次结论是：匹配 SMARTBOX 的原领取请求无 challenge，并得到原矿机认可的响应；
+尚未证明一次新的奖励领取成功。具体 mutation 状态没有保存，不能补猜为
+`DROP_INSTANCE_ALREADY_CLAIMED`，旧奖励授予也不能用于解释先前 WEB 响应的实际效果。
+此固定目标不再重提领取。后续要验收新领取，需一个当前未授予的新目标，并在其
+领取前保存官方 benefit 映射、已获奖励基线及脱敏 mutation 状态，再比较领取后结果；
+不能降低标准，把原目标消失或旧奖励记录当作新领取成功。
+
 新的依据是 [GrubDrops 作者的第一手报告](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5873543952)：其 SMARTBOX/TV 登录配合相同客户端身份，通过频道发现、Inventory 和直接 Go HTTP 路径观看并领取。其 [profile](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/profile.go)、[transport](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/client.go) 与 [claim](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/claim.go) 支持这一具体实现方向，但作者未附逐请求及领取后库存证据，不能替代 Muse 实测。
 
 此前 Muse 的领取失败使用 WEB 身份；SMARTBOX 的既有对照是搭配 ANDROID_APP 查询 dashboard。它们没有验证同签发方 SMARTBOX 领取。旧 `muse-web-claim-candidate.md` 中停止换客户端和新候选的要求属于那次 WEB hash 实验的历史边界；本次是源码证据支持的新身份对照，保留所有旧记录，不重新执行 WEB 失败尝试，不需要用户再次传话确认。
