@@ -16,10 +16,17 @@
 它没有补回旧 challenge 类型。用户转述的报告为
 `probe-reports/reconcile-296e797-20260930-2230.json`，本机没有独立读取 Muse 上的文件。
 
-新的单次候选入口只对齐下载网页源码的领取 hash，具体见
-[Muse 网页查询候选](muse-web-claim-candidate.md)。它使用原账号的全新库存资格检查，
-在同目录、同进程锁下单独记录候选尝试，原 journal 保留。这不是通用重试开关；
-候选记录一旦存在，再启动也只能核对，不能再次提交。
+随后 Muse 已执行 `0d30837` 单次候选，用户转述的报告为
+`probe-reports/web-claim-0d30837-20260930-2235.json`，本机未独立读取完整文件。
+领取前目标为 60/60、未领取、有真实实例，前置条件满足且服务端账号关联为 true。
+固定网页查询候选提交后，明确记录
+`response_challenge:{present:true,type:"integrity"}`，以 `claim_unconfirmed` 退出。
+这补充了本次请求的 challenge 类型证据，但没有补回 `7614144` 的旧类型。
+此次同样没有提交之后的 Inventory 读取，不能把前置库存当成领取后状态。
+
+该实验已结束，具体见 [Muse 网页查询候选结果](muse-web-claim-candidate.md)。
+原 journal 和同目录的候选 journal 均保留。当前不重复核对或提交，不更换 hash、
+Client-Id 或创建新候选来继续尝试。
 
 ## 官方源码和定位方式
 
@@ -78,9 +85,10 @@ node docs/campaign-discovery/derive-claim-hash.cjs ..
 “旧领取查询仅选择 status”的假设也未匹配旧 hash，不能据此声称恢复了历史 AST。
 脚本因此报告 `offline_derived_control_unverified`、退出码 2，而非线上验收通过。
 
-**这是可复现的源码派生值，尚未线上验证。** 它与旧常量不同不能证明此前 challenge
-的根因是旧 hash，也不能保证被服务器接受。固定候选入口只验证这一处差异，主矿机
-及旧诊断仍使用原常量；不会因此自动重放、刷新 token 或切换身份。
+**这是可复现的源码派生值；Muse 已提交一次，但收到 integrity challenge，未确认
+服务器接受该查询定义或完成领取。** 它与旧常量不同不能证明此前 challenge 的根因是
+旧 hash。固定候选入口只改变这一处，主矿机及旧诊断仍使用原常量；不会因此自动重放、
+刷新 token 或切换身份。
 
 ## 网页的正常 challenge 处理
 
@@ -99,6 +107,10 @@ client/device/session/version/OAuth；此前源码已确认其 SDK 加载和约 
 偏移 `50420` 附近要求领取结果存在、无 `error` 且状态被接受，然后刷新数据。
 在本地已下载源码可见范围中，未发现该类普通 timed drop 的另一条可直接替代领取路径。
 
-已有尝试的服务器状态核对已经完成；现在以独立、限次的候选验证请求定义差异。
-通用 challenge 仍不能自动解释为 integrity；候选再次被挑战后立即结束，不展开 hash
-枚举、Client-Id 切换、浏览器探针或循环提交。
+Muse 早先的浏览器探针已拿到过 integrity token，但携带 token 的 dashboard 仍被挑战。
+签发成功不等于受保护接口接受会话；本次候选也没有建立可用的完整性会话。
+现有证据不足以归因特定头、自动化检测或出口 IP，不能把“加上 Client-Integrity”
+直接当成修复。需要的是被服务器接受、身份绑定一致且能正常续期的会话。
+
+用户正在等待平台对浏览器出口和持续运行条件的回复。当前不重开已因 SDK 域 429
+停止的浏览器探针，也不扩展 hash 枚举、Client-Id 切换或循环领取。

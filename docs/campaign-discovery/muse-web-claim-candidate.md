@@ -1,11 +1,37 @@
-# Muse：一次网页领取查询候选实验
+# Muse：网页领取查询候选实验已结束
 
-2026-09-30。Muse 已在 `296e797` 上完成只读核对：与原尝试绑定的账号和目标匹配，
-当前 Inventory 明确为 60/60、`isClaimed:false`。因此现在有独立的领取后服务器状态，
-可以确认核对时目标尚未领取；此前 `7614144` 的领取前库存不能替代这个证据。
+2026-09-30。Muse 此前在 `296e797` 上完成只读核对：与原尝试绑定的账号和目标匹配，
+当时 Inventory 明确为 60/60、`isClaimed:false`。这提供了原领取尝试后的服务器状态，
+可以确认那次核对时目标尚未领取；此前 `7614144` 的领取前库存不能替代这个证据。
 
-下一步仅验证一个来自已下载官方源码的候选领取查询。它仍是候选，不承诺改 hash 就能
-解决 challenge，也没有解决完整活动发现和全天候运行。
+## 0d30837 实测结果与当前交接
+
+Muse 已执行此候选，报告路径为
+`probe-reports/web-claim-0d30837-20260930-2235.json`。以下依据用户转述的脱敏结果，
+本机没有独立读取 Muse 上的完整报告：
+
+- 退出码 1、`claim_unconfirmed`，共 5 次请求、1.7 秒，`watch_sends:0`。
+- 领取前目标为 60/60、`is_claimed:false`，真实领取实例存在，
+  `preconditions_met:true`，本次服务端明确返回 `account_link_state:true`。
+- 固定候选提交后记录 `response_challenge:{present:true,type:"integrity"}`。
+  这是此次领取请求收到 integrity challenge 的直接证据；不能补作旧响应的类型证据。
+- 遇 challenge 即停止，没有领取后的 Inventory 读数。领取前的 false 不能当作
+  候选提交后的状态；本轮仍为未确认，原记录和候选记录均保留。
+
+**候选实验已结束，下面的命令与边界仅作历史记录，不再执行。** 更换为这份源码派生
+hash 没有获得领取确认，也没有验证服务器接受了该查询定义。当前不再试其他 hash、
+切换 Client-Id、重新领取或为重复提交创建新候选／状态目录。
+
+此前 Muse 浏览器曾两次取得 HTTP 200 的 integrity token，但携带 token 的 dashboard
+请求仍被挑战。因此缺失的是**被 Twitch 接受、身份绑定一致且能够正常续期的完整性
+会话**，不能简化为“从未拿到 token”或“补一个头即可解决”。本入口没有这套会话，
+纯 Python 观看达标也不能证明领取和完整活动发现已可用。
+
+用户已联系 Muse 平台，正在等待浏览器出口和持续运行条件的回复。当前保留 Cookie、
+两份 journal、探针报告和本地改动；不启动领取／浏览器复跑或常驻领取任务。
+收到可执行的出口方案后先评估是否改变已有阻塞，再决定有界的正常网页验证。
+即使恢复联网，也仍须证明受保护请求接受会话、正常续期以及领取后库存确认，
+不能直接宣称 7×24 小时方案完成。
 
 ## 这次具体改变什么
 
@@ -36,13 +62,9 @@ persisted-query link 和 GraphQL printer，重建 hash 输入；不访问 Twitch
 匹配旧 hash。脚本因此报告 `offline_derived_control_unverified`、退出码 2。
 这不否定已完成的源码复现，但不能把它写成服务器已接受候选，更不能归因自动化检测。
 
-## 保留现状并执行一次
+## 历史执行方式（已结束，勿复跑）
 
-保留 Cookie、原脚本、所有本地改动和两轮已有报告。在当前仓库先检查工作区与 HEAD，
-fetch `origin codex/campaign-discovery`，仅做可保留现有文件的快进更新，并核对本次交接
-指定的提交。发生分叉、冲突或覆盖风险时回报，不使用 reset、clean、强制切换或清理文件。
-
-在现有 Python 环境执行一次：
+`0d30837` 交接时使用的命令如下，仅供解释既有报告：
 
 ```bash
 DISPLAY=:99 python check_web_claim.py --cookies cookies.jar --campaign-name "Rust Isles AR" --proxy-env HTTPS_PROXY
@@ -85,7 +107,7 @@ DISPLAY=:99 python check_web_claim.py --cookies cookies.jar --campaign-name "Rus
 日志包含用于账号绑定的私有 user ID，但不保存 OAuth、Cookie、代理凭据或真实领取实例 ID；
 不要提交这些状态文件或贴进聊天。正常报告使用脱敏 JSON。
 
-## 回报与后续
+## 历史报告格式与状态含义
 
 将本次完整脱敏标准输出保存在持久的 `docs/campaign-discovery/probe-reports/` 下一个新文件，
 另记录实际提交、时间和退出码，不覆盖原报告，也不要为了保存输出再执行一遍。
@@ -98,6 +120,5 @@ DISPLAY=:99 python check_web_claim.py --cookies cookies.jar --campaign-name "Rus
 - `claim_unconfirmed`：候选已记录一次尝试，但尚未获得明确库存确认；不能再次提交。
 - `failed`：前置条件或读取失败，查看具体阶段，不解释为空库存或领取成功。
 
-前两种状态退出码为 0，其余为 1。即使本次领取成功，后续活动发现、持续运行和 VM 恢复
-仍未完成验收。
+前两种状态退出码为 0，其余为 1。后续活动发现、持续运行和 VM 恢复仍未完成验收。
 用户唯一可用的运行机器仍是 Muse 云主机，7×24 小时目标尚未完成。

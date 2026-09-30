@@ -1,12 +1,13 @@
 # Muse：完成一个已发现的掉宝并核验领取
 
 2026-09-30。目标仍是在用户唯一可用的 Muse 云主机上实现全天候发现、观看、领取和恢复。
-本入口只完成下一项有界验证：延续已在 Inventory 中出现的 Rust Isles AR，尝试领取一次，
-再读取同账号服务器库存确认。它不是常驻服务，也不代表全部 campaign 发现已修复。
+本入口用于已结束的有界验证：延续已在 Inventory 中出现的 Rust Isles AR，尝试领取一次，
+以同账号服务器库存确认结果。它不是常驻服务，也不代表全部 campaign 发现已修复。
 
-**当前进展：Muse 已完成下文的 `296e797 --reconcile-only` 核对，目标仍是 60/60、
-`isClaimed:false`。本轮不再重复该命令。** 下一步执行
-[网页领取查询的单次候选验证](muse-web-claim-candidate.md)，保留这里的原尝试记录。
+**当前进展：完成观看、原领取尝试及 `296e797 --reconcile-only` 核对后，Muse 又完成了
+`0d30837` 网页查询候选。候选响应明确带 integrity challenge，领取仍未确认。**
+见 [候选结果与当前交接](muse-web-claim-candidate.md)。下文命令只作历史记录，不再执行；
+保留两份尝试记录，等待已联系的平台回复。此轮不重跑观看、核对、领取或浏览器探针。
 
 ## 已获得的证据
 
@@ -39,7 +40,7 @@ challenge、token 和响应体均不输出。实际请求记录只增加 `integr
 
 ### 已完成：296e797 只读核对
 
-保留原状态目录，更新到本次交接指定提交后执行一次：
+`296e797` 当时使用的历史命令如下，已完成，不再执行：
 
 ```bash
 DISPLAY=:99 python finish_channel_drop.py --cookies cookies.jar --channel hjune --campaign-name "Rust Isles AR" --proxy-env HTTPS_PROXY --reconcile-only
@@ -61,7 +62,7 @@ DISPLAY=:99 python finish_channel_drop.py --cookies cookies.jar --channel hjune 
 这次核对只回答“现在是否已经领取”，不重新获取旧 challenge 类型，也不验证新的
 完整性方案。后续正常网页领取链的源码比对见[领取 challenge 源码记录](claim-challenge-source.md)。
 
-## 保留文件并更新
+## 历史准备步骤（仅供解释实验）
 
 在现有仓库和 Python 环境中工作，保留 Cookie、`manual_watch.py`、本地报告及所有改动。
 先查看 `git status --short` 和当前提交，再 fetch `origin codex/campaign-discovery`，
@@ -69,12 +70,12 @@ DISPLAY=:99 python finish_channel_drop.py --cookies cookies.jar --channel hjune 
 若存在分叉、冲突或文件覆盖风险，先回报，不使用 reset、clean、强制 checkout 或自动清理。
 不要推断本地分支名与远端相同，也不要为了更新切换或覆盖现有工作。
 
-本次新增入口是 `finish_channel_drop.py`；之前的 `check_channel_watch.py` 仍保留十分钟语义。
+当时新增入口是 `finish_channel_drop.py`；之前的 `check_channel_watch.py` 仍保留十分钟语义。
 不要修改原有脚本以延长它，也不要把新入口加入 cron。
 
 ## 历史：7614144 的观看及领取命令（当前不再执行）
 
-下面记录的是已结束实验的命令；当前使用上面的 `--reconcile-only` 命令：
+下面仅记录已结束实验的命令；当前不再执行观看或核对：
 
 ```bash
 DISPLAY=:99 python finish_channel_drop.py --cookies cookies.jar --channel hjune --campaign-name "Rust Isles AR" --proxy-env HTTPS_PROXY --linked-confirmed
