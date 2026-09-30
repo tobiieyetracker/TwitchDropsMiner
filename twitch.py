@@ -21,7 +21,7 @@ from gui import GUIManager
 from channel import Channel
 from websocket import WebsocketPool
 from inventory import DropsCampaign
-from gql_recovery import recover_challenges, validate_campaign_response
+from gql_recovery import CampaignAccessError, recover_challenges, validate_campaign_response
 from web_session import TwitchWebSession
 from exceptions import (
     ExitRequest,
@@ -1713,7 +1713,7 @@ class Twitch:
                     for response_json in response_list:
                         available_info: JsonType = response_json["data"]["channel"]
                         acl_available_drops_map[int(available_info["id"])] = (
-                            available_info["viewerDropCampaigns"] or []
+                            available_info["viewerDropCampaigns"]
                         )
             except Exception:
                 # asyncio.as_completed doesn't cancel tasks on errors
@@ -1727,5 +1727,7 @@ class Twitch:
             channel_data = acl_streams_map[channel_id]
             if channel_data["stream"] is None:
                 continue
+            if self.settings.available_drops_check and channel_id not in acl_available_drops_map:
+                raise CampaignAccessError("Twitch omitted drop availability for an online channel")
             available_drops: list[JsonType] = acl_available_drops_map.get(channel_id, [])
             channel.external_update(channel_data, available_drops)

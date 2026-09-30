@@ -56,7 +56,33 @@ def challenge_type(operation: Json, response: Json) -> str | None:
     return None
 
 
+def _validate_available_drops(response: Json) -> None:
+    data = response.get("data")
+    if not isinstance(data, dict) or "channel" not in data:
+        raise CampaignAccessError("Twitch's AvailableDrops response schema has changed")
+    channel = data["channel"]
+    if channel is None:
+        raise CampaignAccessError(
+            "Twitch returned no channel for AvailableDrops. "
+            "Channel drop availability is unknown."
+        )
+    if not isinstance(channel, dict) or "viewerDropCampaigns" not in channel:
+        raise CampaignAccessError("Twitch's AvailableDrops response schema has changed")
+    campaigns = channel["viewerDropCampaigns"]
+    if campaigns is None:
+        raise CampaignAccessError(
+            "Twitch returned null for AvailableDrops.viewerDropCampaigns. "
+            "Channel drop availability is unknown; this is not an empty campaign list."
+        )
+    if not isinstance(campaigns, list):
+        raise CampaignAccessError("Twitch's AvailableDrops response schema has changed")
+
+
 def validate_campaign_response(operation: Json, response: Json) -> None:
+    if operation.get("operationName") == "DropsHighlightService_AvailableDrops":
+        # Unlike dashboard nulls, these nulls are not evidence of an integrity challenge.
+        _validate_available_drops(response)
+        return
     path = CAMPAIGN_PATHS.get(operation.get("operationName"))
     if not path:
         return

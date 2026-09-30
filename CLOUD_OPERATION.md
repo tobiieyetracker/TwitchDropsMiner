@@ -1,10 +1,21 @@
 # Muse：全天候运行目标与当前下一步
 
-最新状态：Muse 按 `a623b25` 交接进行的一次配对探针，约 7 秒内因 SDK 域的
+最新状态：Muse 的纯 Python 检查确认现有 `manual_watch.py` 只查 Inventory，没有发送观看事件，
+领取为 TODO。WEB 身份的 Inventory 可读，两个先前候选频道未获得活动目标，因此未验证观看／领取。
+这不能证明其他频道均无活动，也不能证明观看必须使用浏览器或 WebSocket。
+原矿机有 Python HTTP `Channel.send_watch()` 路径；其在 Muse 上是否产生真实进度仍未知。
+
+下一步按[单频道纯 Python 验证](docs/campaign-discovery/python-watch-transport.md)执行一次有限对照：
+官网明确列出的 `hJune`（Rust Isles AR），备用 `DisguisedToast`（SAR）；需在执行时核实直播及本账号资格。
+本提交同时修正 AvailableDrops 的 null 被误当空列表、单频道吞掉相关异常的问题。
+这不是完整矿机启动方案。先取得服务器进度证据，再处理发现接入和领取；不把 HTTP 204 当成成功。
+用户只有 Muse 主机可用，当前工作继续围绕该环境，不以另一台主机作为执行前提。
+
+浏览器验证仍保持停止：Muse 按 `a623b25` 交接进行的一次配对探针，约 7 秒内因 SDK 域的
 document HTTP 429 主动结束，未取得可比较的 dashboard / integrity 响应。
 与 `b7ea9ce` 的同类 429 约相隔 15 分钟，两轮均无可解析的 Retry-After。
 这次证实了探针停止机制，没有验证 token 配对或 campaign 可用性。
-**停止同环境复跑，不再按下方旧命令自动启动诊断。** 先保存证据并确认平台支持的
+**停止同环境浏览器探针复跑，不再按下方旧命令自动启动诊断。** 保存证据并确认平台支持的
 浏览器访问及常驻运行条件；详见[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。
 
 用户希望以 Python 为运行主体。请同时阅读
@@ -24,7 +35,7 @@ document HTTP 429 主动结束，未取得可比较的 dashboard / integrity 响
 
 - Ubuntu 24.04.5 LTS / x86_64 / Python 3.12.3；早期验证提交为 `d0c2a9e`，
   后续已确认在 `aa6b215` 上测试代理修正。
-- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 126 项通过，
+- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 153 项通过，
   不能视作 Muse 已运行新增测试。
 - Chrome for Testing 154.0.8037.92 安装于 `/opt/chrome-linux64`，
   `/opt/google/chrome/chrome` 是对应软链接；`channel="chrome"` 可以找到并启动浏览器。
@@ -148,9 +159,10 @@ ViewerDropsDashboard 或 dropCampaigns 字段；已分析的前端从 GQL 加载
 若发现其他公开页，需提供其实际包含的 campaign ID、有效期和覆盖范围，并继续核实
 用户关联/进度/领取所需接口。不能把活动宣传信息当作完整的账户活动数据。
 
-若 Muse 平台没有可用的受支持出口，则现有环境还不能承担已验证的全天候矿机。
-可选择在网络正常的 Linux 主机常驻矿机，再由 Muse 管理；这也是待部署和验收的方案，
-不是已经验证成功的迁移。不要继续要求用户提供更多 Cookie 来替代完整性问题的验证。
+Muse 的浏览器鉴权路线仍未通过。当前有限的 Python 频道验证不依赖再次运行浏览器探针，
+但不能预先承诺其发现／观看／领取都能通过。用户只有该主机可用；依据现有平台文档继续核实
+任务结束后的进程存活、VM 恢复机制及代理动态读取，不把短 uptime 当成永久不可行的证据。
+不要继续要求用户提供更多 Cookie 来替代完整性问题的验证。
 
 ## Cookie 保留修正
 
@@ -162,7 +174,8 @@ Cookie 并删除原文件，再启动设备登录。现在对此明确报错并�
 这项保护本身不增加 WEB Cookie 导入、浏览器会话持久化或完整性恢复能力。
 Cookie 保护提交的 7 项回归测试使用临时文件和模拟验证响应；当时 63 项离线测试通过。
 新增独立探针后为 78 项通过，补齐请求生命周期观测后为 85 项通过；
-签发关联、解析取消及 429 中止测试加入后为 126 项通过。新增观测仍需 Muse 实测。
+签发关联、解析取消及 429 中止测试加入后为 126 项通过；
+本轮增加 27 项 AvailableDrops 传输／调用方回归测试后为 153 项通过。Linux 实效仍需 Muse 实测。
 
 ## 已完成的代理认证检查（历史步骤）
 

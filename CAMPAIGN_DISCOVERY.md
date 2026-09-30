@@ -10,6 +10,11 @@ For the next Linux run, follow [the Muse validation handoff](LINUX_VALIDATION.md
 The intended delivery is now unattended discovery, progress and claims on the
 user's Xvfb-only Linux host; see [cloud operation requirements](CLOUD_OPERATION.md).
 That is not implemented or verified end to end by this candidate.
+The latest [bounded Python channel handoff](docs/campaign-discovery/python-watch-transport.md)
+records official participating-channel candidates and the existing HTTP watch
+transport. AvailableDrops null/missing data now reports unknown availability
+instead of becoming an empty list; silent null does not infer an integrity challenge.
+Neither that correction nor transport acceptance proves server-side watch progress.
 The subsequent [pure Python integrity test](PYTHON_AUTH_VALIDATION.md) received
 tokens from a direct HTTP integrity request, but those tokens were rejected by
 the dashboard. The same Python transport succeeded with the normal web page's
@@ -166,10 +171,11 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (126 passed, including cookie
+Run `python -m pytest -q tests` for the offline suite (153 passed, including cookie
 preservation and the standalone diagnostic's identity checks, read-only batch
 extraction, network lifecycle observation, issuance/use correlation, cancellation,
-429 stop conditions and redacted output). Remaining:
+429 stop conditions, redacted output and AvailableDrops null/empty handling through
+single-channel and bulk checks). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
 rendering, plus a longer run through natural token expiry. No root cause was
 established for the failed Edge sign-in; browser protections were not changed.
