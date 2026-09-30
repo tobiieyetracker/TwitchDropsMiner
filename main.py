@@ -71,6 +71,7 @@ if __name__ == "__main__":
         browser_auth: bool
         browser_channel: str | None
         check_campaigns: bool
+        campaign_check_exit: bool
         smartbox_auth: bool
         cookie_file: str | None
         campaign_web_cookie_file: str | None
@@ -134,6 +135,10 @@ if __name__ == "__main__":
         help="Fetch campaigns once without starting streams or claiming drops",
     )
     parser.add_argument(
+        "--campaign-check-exit", action="store_true",
+        help="Close after --check-campaigns completes and do not save application settings",
+    )
+    parser.add_argument(
         "--smartbox-auth", action="store_true",
         help="Use Twitch for TV device login and its matching SMARTBOX request identity",
     )
@@ -179,6 +184,8 @@ if __name__ == "__main__":
     args = parser.parse_args(namespace=ParsedArgs())
     if args.cookie_file and not args.check_campaigns:
         parser.error("--cookie-file can only be used with --check-campaigns")
+    if args.campaign_check_exit and not args.check_campaigns:
+        parser.error("--campaign-check-exit can only be used with --check-campaigns")
     if args.cookie_file and args.browser_auth:
         parser.error("--cookie-file cannot be combined with --browser-auth")
     if args.campaign_web_cookie_file and not args.smartbox_auth:
@@ -245,6 +252,8 @@ if __name__ == "__main__":
                 loop.remove_signal_handler(signal.SIGTERM)
             client.print(_("gui", "status", "exiting"))
             await client.shutdown()
+        if args.campaign_check_exit and not client.gui.close_requested:
+            client.gui.close()
         if not client.gui.close_requested:
             # user didn't request the closure
             client.gui.tray.change_icon("idle" if args.check_campaigns and exit_status == 0 else "error")
@@ -256,7 +265,8 @@ if __name__ == "__main__":
         # save the application state
         # NOTE: we have to do it after wait_until_closed,
         # because the user can alter some settings between app termination and closing the window
-        client.save(force=True)
+        if not args.check_campaigns:
+            client.save(force=True)
         client.gui.stop()
         client.gui.close_window()
         sys.exit(exit_status)

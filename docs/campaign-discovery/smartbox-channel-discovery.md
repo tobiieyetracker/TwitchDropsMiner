@@ -29,7 +29,7 @@ campaign request stops the scan rather than silently retrying under another
 identity.
 
 ```bash
-DISPLAY=:99 python main.py --smartbox-auth --check-campaigns --cookie-file cookies.jar.bak --campaign-web-cookie-file cookies.jar --campaign-channel rainbow6 --campaign-channel-only
+DISPLAY=:99 python main.py --smartbox-auth --check-campaigns --campaign-check-exit --cookie-file cookies.jar.bak --campaign-web-cookie-file cookies.jar --campaign-channel rainbow6 --campaign-channel-only
 ```
 
 `--cookie-file` is accepted only with `--check-campaigns`. That mode reads the
@@ -43,7 +43,9 @@ each adds at most ten high-ranked channels. Results retain sources at campaign
 and drop level, merge by campaign ID and drop ID, and use Inventory as the source
 of truth for progress and account-link state. A channel's null `AvailableDrops`
 value remains unknown; other channel results are retained. Challenges and
-rate limits stop the scan.
+rate limits stop the scan. `--campaign-check-exit` closes the diagnostic window
+after the check and skips saving application settings; without it the window
+remains available for inspection.
 
 For a normal SMARTBOX run, pass the WEB jar explicitly when it is available:
 
