@@ -302,3 +302,74 @@ def test_missing_game_is_not_replaced_from_available_drops(monkeypatch, tmp_path
     }))
     assert code == 1 and report["error"] == "broadcast_settings_game_unknown"
     assert network.sends == []
+
+
+@pytest.mark.parametrize("progress", [False, True])
+def test_empty_current_drop_uses_inventory_as_independent_baseline(monkeypatch, tmp_path, progress):
+    def configure(network):
+        network.progress = progress
+        network.responses["DropCurrentSessionContext"] = Response({"data": {"currentUser": {
+            "id": "42", "dropCurrentSession": {"dropID": "", "currentMinutesWatched": 17},
+        }}})
+    code, report, network = scenario(monkeypatch, tmp_path, configure=configure)
+    assert len(network.sends) == 2
+    assert report["state"] == ("progress_observed" if progress else "no_progress_observed")
+    assert code == (0 if progress else 1)
+    for checkpoint in report["checkpoints"]:
+        assert checkpoint["complete"] is True
+        assert checkpoint["current"]["session_state"] == "empty_drop_id"
+        assert checkpoint["current"]["minutes"] is None
+        assert checkpoint["current"]["reported_minutes"] == 17
+    if progress:
+        assert report["progress_evidence"] == [{
+            "drop_id": "drop", "before_minutes": None, "after_minutes": 2,
+            "kind": "new_positive_progress",
+        }]
+    else:
+        assert report["progress_evidence"] == []
+
+
+@pytest.mark.parametrize("inventory,code", [
+    ({"data": {"currentUser": None}}, "user_null"),
+    ({"data": {"currentUser": {"id": "42", "inventory": {"dropCampaignsInProgress": None}}}}, "campaigns_null"),
+])
+def test_empty_current_drop_cannot_skip_invalid_inventory(monkeypatch, tmp_path, inventory, code):
+    def configure(network):
+        network.responses.update({
+            "DropCurrentSessionContext": Response({"data": {"currentUser": {
+                "id": "42", "dropCurrentSession": {"dropID": "", "currentMinutesWatched": 0},
+            }}}),
+            "Inventory": Response(inventory),
+        })
+    exit_code, report, network = scenario(monkeypatch, tmp_path, configure=configure)
+    assert exit_code == 1 and report["error"] == code
+    assert network.sends == []
+    assert report["checkpoints"][0]["complete"] is False
+    assert report["checkpoints"][0]["current"]["session_state"] == "empty_drop_id"
+    assert "inventory" not in report["checkpoints"][0]
+
+
+@pytest.mark.parametrize("minutes", [0, 2])
+def test_empty_id_to_target_does_not_invent_zero_baseline(minutes):
+    before = {"current": {
+        "session_state": "empty_drop_id", "drop_id": "", "minutes": None,
+        "reported_minutes": 99, "target_drop": False,
+    }, "inventory": {"drops": []}}
+    after = {"current": {
+        "session_state": "present", "drop_id": "drop", "minutes": minutes, "target_drop": True,
+    }, "inventory": {"drops": []}}
+    expected = [{"drop_id": "drop", "before_minutes": None, "after_minutes": 2,
+                 "kind": "new_positive_progress"}] if minutes else []
+    assert probe.progress_evidence(before, after) == expected
+
+
+def test_inventory_increment_is_independent_of_unattributed_current_minutes():
+    before = {"current": {
+        "session_state": "empty_drop_id", "drop_id": "", "minutes": None,
+        "reported_minutes": 99, "target_drop": False,
+    }, "inventory": {"drops": [{"drop_id": "drop", "minutes": 0}]}}
+    after = deepcopy(before)
+    after["inventory"]["drops"][0]["minutes"] = 1
+    assert probe.progress_evidence(before, after) == [{
+        "drop_id": "drop", "before_minutes": 0, "after_minutes": 1, "kind": "increase",
+    }]

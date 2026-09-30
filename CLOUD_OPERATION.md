@@ -1,9 +1,11 @@
 # Muse：全天候运行目标与当前下一步
 
 当前后续以[会话一致的观看验证入口](docs/campaign-discovery/muse-watch-session-check.md)为准。
-Muse 已确认上一轮使用重写适配器、未加载 Cookie，且未校验进度响应的 currentUser；
-十次 204 不能证明原矿机无进度。请使用新增入口直接调用原 Channel.send_watch()，
-不要重复旧手写实验。下方保留此前调查记录与全天候目标。
+Muse 在 `3514975` 的身份与目标检查通过，CurrentDrop 的空 `dropID` 触发严格解析而停止，
+尚未读取 Inventory 或发送观看。本次将空 ID 保留为独立状态，用同账号 Inventory 做
+独立基线，未归属分钟不参与目标进度。更新后按同一命令做一次有限验证。
+更早的手写实验缺 Cookie 且混淆空用户，不能作为原矿机无效的证据，不再复跑。
+下方保留此前调查记录与全天候目标。
 
 最新状态：Muse 的纯 Python 检查确认现有 `manual_watch.py` 只查 Inventory，没有发送观看事件，
 领取为 TODO。WEB 身份的 Inventory 可读，两个先前候选频道未获得活动目标，因此未验证观看／领取。

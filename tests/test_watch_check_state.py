@@ -141,6 +141,23 @@ def test_current_session_for_other_drop_is_preserved():
     assert snapshot["minutes"] == 0
 
 
+@pytest.mark.parametrize("minutes", [0, 17])
+def test_empty_drop_id_is_preserved_without_assigning_minutes(minutes):
+    snapshot = read_current(current_body({"dropID": "", "currentMinutesWatched": minutes}))
+    assert snapshot == {
+        "user_present": True, "user_matches": True, "session_state": "empty_drop_id",
+        "drop_id": "", "reported_minutes": minutes, "minutes": None, "target_drop": False,
+    }
+
+
+@pytest.mark.parametrize("minutes,code", [
+    (None, "current_minutes_null"), (True, "current_minutes_invalid"),
+    (-1, "current_minutes_invalid"), ("0", "current_minutes_invalid"),
+])
+def test_empty_drop_id_does_not_make_invalid_minutes_valid(minutes, code):
+    assert_code(read_current, current_body({"dropID": "", "currentMinutesWatched": minutes}), code)
+
+
 def test_current_session_missing_is_not_none():
     body = current_body()
     del body["data"]["currentUser"]["dropCurrentSession"]
@@ -151,7 +168,8 @@ def test_current_session_missing_is_not_none():
     ([], "current_session_invalid"),
     ({}, "current_drop_id_missing"),
     ({"dropID": None}, "current_drop_id_null"),
-    ({"dropID": ""}, "current_drop_id_invalid"),
+    ({"dropID": ""}, "current_minutes_missing"),
+    ({"dropID": " ", "currentMinutesWatched": 0}, "current_drop_id_invalid"),
     ({"dropID": DROP_ID}, "current_minutes_missing"),
     ({"dropID": DROP_ID, "currentMinutesWatched": None}, "current_minutes_null"),
     ({"dropID": DROP_ID, "currentMinutesWatched": -1}, "current_minutes_invalid"),

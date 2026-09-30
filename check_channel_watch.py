@@ -238,10 +238,13 @@ async def snapshot(client, channel, campaign_id, drop_ids, label):
     user_id = str(client._auth_state.user_id)
     current = await client.gql_request(GQL_QUERIES["CurrentDrop"].with_variables({"channelID": str(channel.id)}))
     current_state = snapshot_current(current, user_id, drop_ids)
+    # Keep an observed CurrentDrop state even if the subsequent Inventory read
+    # fails. Only a completed snapshot can be returned as a comparison baseline.
+    result = {"checkpoint": label, "complete": False, "current": current_state}
+    client.report["checkpoints"].append(result)
     inventory = await client.gql_request(GQL_QUERIES["Inventory"])
     inventory_state = snapshot_inventory(inventory, user_id, campaign_id, drop_ids)
-    result = {"checkpoint": label, "current": current_state, "inventory": inventory_state}
-    client.report["checkpoints"].append(result)
+    result.update(inventory=inventory_state, complete=True)
     return result
 
 
@@ -249,7 +252,8 @@ def progress_evidence(before, after):
     def values(checkpoint):
         result = {d["drop_id"]: d["minutes"] for d in checkpoint["inventory"]["drops"]}
         current = checkpoint["current"]
-        if current.get("target_drop"):
+        if (current.get("session_state") == "present"
+            and current.get("drop_id") and current.get("target_drop")):
             result[current["drop_id"]] = max(current["minutes"], result.get(current["drop_id"], 0))
         return result
     initial = values(before)

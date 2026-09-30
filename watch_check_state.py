@@ -88,8 +88,21 @@ def snapshot_current(body: Any, user_id: str, target_drop_ids: set[str]) -> dict
         return {**snapshot, "session_state": "none", "minutes": None}
     if not isinstance(session, dict):
         raise WatchCheckError("current_session_invalid")
-    drop_id = _identifier(session, "dropID", "current_drop_id")
+    drop_id = _field(session, "dropID", "current_drop_id", str)
+    if drop_id != "" and not drop_id.strip():
+        raise WatchCheckError("current_drop_id_invalid")
     minutes = _minutes(session, "currentMinutesWatched", "current_minutes")
+    if drop_id == "":
+        # Observed on a valid WEB session. Preserve the shape without assuming
+        # it means no session, zero target progress, or an eligible target drop.
+        return {
+            **snapshot,
+            "session_state": "empty_drop_id",
+            "drop_id": "",
+            "reported_minutes": minutes,
+            "minutes": None,
+            "target_drop": False,
+        }
     return {
         **snapshot,
         "session_state": "present",

@@ -2,6 +2,32 @@
 
 2026-09-30。当前仍是候选方案，没有通过 Muse 的观看、领取或全天候运行验收。
 
+## 3514975 实测与空 dropID 修正
+
+Muse 原样运行新入口，4 次请求后在 baseline 的 `current_drop_id_invalid` 停止，
+`watch_sends:0`。WEB token、已发生请求的身份／Cookie 匹配通过；目标活动真实存在，
+游戏字段来源已确认。CurrentDrop 返回对象，但 `dropID` 是精确的空字符串。
+本轮尚未请求 Inventory，没有观看与进度对照。报告保存在 Muse 的
+`probe-reports/watch-check-3514975-20260930-1945.json`。
+
+原矿机对空 ID 只会匹配不到 `_drops`，不会因此阻止观看。入口先前的严格 ID 校验
+额外阻止了新活动实验；本次将精确的 `""` 保留为 `session_state:"empty_drop_id"`。
+合法原始分钟值放在 `reported_minutes`，目标 `minutes` 为 null，永不参与目标进度计算。
+这不解释 Twitch 为什么返回空 ID，也不把它等同于“无会话”或“零进度”。
+
+随后继续查询同身份 Inventory：真实空列表是“目标尚未出现”的有效基线；目标已有
+分钟则按真实 ID 记录。Inventory 完整通过后，才允许其余前置检查与限时观看。
+空 ID 本身不证明账号关联或目标资格，原有外部关联确认条件保持不变。
+用户 null、ID 不匹配、缺字段、null 列表、错误分钟类型／负数、challenge、429 仍会停止。
+
+`checkpoints` 现在会保留已成功解析的 CurrentDrop；若 Inventory 后续失败，
+该条 `complete:false`，不能用于比较或作为观看前置。完整基线与末次快照才可能产生
+`progress_evidence`。空 ID 下即使报告正分钟也不会算作目标进度；Inventory 可以独立
+证明同一个目标 drop 的分钟数增加。
+
+更新后仍用下方相同命令只执行一次。这是对已定位的解析门槛作修正，不是无变化复跑。
+本地测试通过仍不能代替这次 Linux 实测。
+
 ## 上一轮实验不能证明什么
 
 Muse 已确认，`073e2ba` 上的十分钟实验使用了重写的 HTTP 流程，没有调用原
