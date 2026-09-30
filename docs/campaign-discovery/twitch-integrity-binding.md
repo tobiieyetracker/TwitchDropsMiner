@@ -121,3 +121,28 @@ token 有效期。该结果仍不能证明是自动化检测、TLS 指纹、某�
 
 官网活动查询未成功前，Python 对照仍不执行。即使后续单次查询成功，仍需另外验证
 矿机会话持久化、自然刷新、真实进度、领取以及重启恢复，才能评估全天候运行。
+
+## 2026-10-01 核对上游 issue #1165
+
+已读取该 issue 当前全部 34 条评论，最新维护者更新为 2026-09-30。
+维护者称基于 zendriver 的浏览器登录已工作；基于社区 get_integrity 示例的
+原型在家用机器工作、办公机器不能获得有效 token，Linux/macOS 尚未确认。
+这说明上游也仍在验证环境可靠性，不能把换驱动当作 Muse 已验证的修复。
+来源：[维护者最新进展](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5908413313)。
+
+社区曾报告在其改造的 `gql_request()` 中让 ClaimDrop 使用 `integrity=True`
+后恢复领取；该参数依赖其附带的 token 获取与请求实现，不能只复制布尔参数
+到原函数。它是需要取得服务端接受的 token 的候选实现，不是避开完整性检查。
+Muse 已有“签发返回 token、GQL 仍拒绝”的证据，尚未满足这一前提。
+来源：[领取改动评论](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5833126276)。
+
+PR #1177 作者后来称，首次点击书签后保持原 Twitch 页面打开可自动续期，
+不能把作者的方案概括成“每次刷新都必须手点”。但当前草稿 `e3afabf` 的
+书签只执行一次签发与交付，未包含持续交付循环；localhost 的定时器是状态
+轮询。该报告尚不足以证明矿机会持续收到新 token，仍需实现核对与自然过期实测。
+PR 尚未合并；Muse 的正常浏览器网络、登录态和 token 接受问题也仍需满足。
+来源：[作者补充](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5882655349)、
+[PR #1177](https://github.com/DevilXD/TwitchDropsMiner/pull/1177)、
+[当时的桥接代码](https://github.com/DevilXD/TwitchDropsMiner/blob/e3afabf50045f27bdcc335b78a71d18a4412fc37/bridge.py)。
+
+此次只读取 GitHub 资料并核对代码，没有执行社区附件、切换登录身份或新增 Twitch 请求。
