@@ -215,6 +215,17 @@ def test_exact_channel_scan_resolves_rainbow6_even_when_not_in_directory():
     ]
 
 
+def test_game_directory_null_game_returns_no_channels_without_aborting_scan():
+    client = Twitch.__new__(Twitch)
+    client.gql_request = AsyncMock(return_value={"data": {"game": None}})
+
+    streams = asyncio.run(
+        client._get_live_streams_by_slug("missing-game-slug", limit=10, drops_enabled=True)
+    )
+
+    assert streams == []
+
+
 def test_null_channel_availability_is_unknown_and_does_not_abort_other_candidates():
     from gql_recovery import CampaignAvailabilityUnknown, CampaignAccessError
 

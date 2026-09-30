@@ -1974,15 +1974,25 @@ class Twitch:
             )
         except GQLException as exc:
             raise MinerException(f"Game: {slug}") from exc
-        if "game" in response["data"]:
-            return [
-                Channel.from_directory(
-                    self, stream_channel_data["node"], drops_enabled=drops_enabled
-                )
-                for stream_channel_data in response["data"]["game"]["streams"]["edges"]
-                if stream_channel_data["node"]["broadcaster"] is not None
-            ]
-        return []
+        data = response.get("data")
+        if not isinstance(data, dict) or "game" not in data or data["game"] is None:
+            # Twitch may return data.game = null when a configured slug is no
+            # longer resolvable. That means this directory contributes no
+            # channels; keep scanning the remaining explicit games/channels.
+            return []
+        game_data = data["game"]
+        if not isinstance(game_data, dict):
+            raise MinerException(f"Game: {slug}")
+        streams = game_data.get("streams")
+        if not isinstance(streams, dict) or not isinstance(streams.get("edges"), list):
+            raise MinerException(f"Game: {slug}")
+        return [
+            Channel.from_directory(
+                self, stream_channel_data["node"], drops_enabled=drops_enabled
+            )
+            for stream_channel_data in streams["edges"]
+            if stream_channel_data["node"]["broadcaster"] is not None
+        ]
 
     async def bulk_check_online(self, channels: abc.Iterable[Channel]):
         """
