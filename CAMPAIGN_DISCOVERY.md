@@ -85,6 +85,13 @@ an explicit error and preserves `cookies.jar`, including during shutdown. It
 does not replace that token by starting a device login. This protects imported
 WEB credentials; it does not import them into the browser or provide integrity.
 
+For an isolated, no-Tk diagnostic of a user-provided WEB cookie, use
+`check_campaign_auth.py` as described in [the cloud handoff](CLOUD_OPERATION.md).
+It leaves the selected cookie file untouched, observes the website's dashboard,
+and performs one Python control read only after that website request succeeds
+for the expected identity. It uses normal browser settings and retains certificate
+verification. This is a diagnostic import, not persistent authentication in the miner.
+
 ## Recovery and limits
 
 - All GraphQL requests in browser mode use the same captured web identity.
@@ -137,8 +144,9 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (63 passed, including cookie
-preservation through failed authentication and shutdown). Remaining:
+Run `python -m pytest -q tests` for the offline suite (78 passed, including cookie
+preservation and the standalone diagnostic's identity checks, read-only batch
+extraction and redacted output). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
 rendering, plus a longer run through natural token expiry. No root cause was
 established for the failed Edge sign-in; browser protections were not changed.
