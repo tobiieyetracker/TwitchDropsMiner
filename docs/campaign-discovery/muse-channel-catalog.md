@@ -80,6 +80,21 @@ TLS 在系统信任初始化后显式创建新的验证上下文，并用于每�
 此前 SAR 新活动发现成功仍成立；应保留其作为有限候选来源，不能仅靠扩大扫描
 把它升级为 Dashboard 的完整替代。此限制独立于游戏 ID 去重和主播限定问题。
 
+## issue 中提到的公共目录候选
+
+2026-10-01 只读核对 [rangermix PR #115](https://github.com/rangermix/TwitchDropsMiner/pull/115)
+及 [SunkwiBOT/twitch-drops-api](https://github.com/SunkwiBOT/twitch-drops-api)。
+Sunkwi 仓库 `811e19a` 的公共 `drops.json` 快照含 89 个游戏、129 个活动条目，
+其中 Rust 有 17 个；本项目已验证的 AR、SAR 活动 ID 和各自频道限制均存在。
+获取公共元数据不需要发送 Muse 的 OAuth 或 Cookie。
+
+它值得作为另一种候选发现来源评估，能够提供本轮频道查询没有涵盖的活动条目，
+但数量不是全量证明，时效和采集完整性没有保证。仓库公开的是从 API 拉取并镜像
+数据的代码，不是后端如何获取活动的完整实现。公共数据中的任何 `self` 字段都
+不能作为 Muse 账号的资格、关联、进度或领取状态；这些必须来自同账号的 Twitch
+响应。PR #115 已关闭未合并，讨论记录了假关联及合并结构问题，不能直接照搬。
+本轮只查阅公开源码与数据，未把该目录接入矿机。
+
 ## 已有证据与候选状态
 
 此前 Muse 使用原矿机会话从 hJune 的 AvailableDrops 发现了 Rust Isles AR，

@@ -146,3 +146,40 @@ PR 尚未合并；Muse 的正常浏览器网络、登录态和 token 接受问�
 [当时的桥接代码](https://github.com/DevilXD/TwitchDropsMiner/blob/e3afabf50045f27bdcc335b78a71d18a4412fc37/bridge.py)。
 
 此次只读取 GitHub 资料并核对代码，没有执行社区附件、切换登录身份或新增 Twitch 请求。
+
+## 扩大 issue 检索后：匹配 SMARTBOX 身份的领取尚未验证
+
+目前本项目的领取失败证据属于 WEB 身份。早期 SMARTBOX 签发 token 搭配
+ANDROID_APP Client-Id 的实验检查的是活动发现，不能用来判定 SMARTBOX token
+与 SMARTBOX Client-Id 匹配时的 ClaimDrop 结果，也不能据此断言所有客户端领取
+都必须走 WEB integrity。
+
+[GrubDrops 作者](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5873543952)
+报告 TV 身份能观看和领取。其 `855fae41983d30cfa03e6979fe1510358df79224` 源码
+在 Claim 前绑定 session 的 TV profile，默认通过 HTTP 直接发送原 ClaimDrop
+operation/hash，不附带 Client-Integrity。
+源码：[profile.go](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/profile.go)、
+[backend.go](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/backend.go)、
+[client.go](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/client.go)。
+
+这是可具体检验的新假设；作者没有提供我们要求的同目标领取后 Inventory
+`isClaimed:true` 证据，其项目也有较宽松判定及自行拼实例的代码，不能原样移植。
+下一项验证应先确认同账号 TV token 的签发方和有效性，从该身份的 Inventory
+读取达标目标及真实实例，单次提交原 ClaimDrop，再以同目标库存确认。
+WEB Cookie 与旧尝试记录保留；先让 Muse 只读核对旧 TV 会话是否仍保留，
+本轮未新增登录、领取或 Twitch 查询。
+
+其他候选的边界：PR #1178 已把 WEB ClaimDrop 接到浏览器传输，但仅有 Windows
+作者报告，Linux、认证代理和自然刷新未验收。rangermix 的已合并
+[PR #124](https://github.com/rangermix/TwitchDropsMiner/pull/124) 有一次桌面交接后
+服务器续期的作者实测，但服务器仍需 Chromium 连通 SDK，交接需可达的服务入口；
+其实现含隐藏自动化特征的启动参数和官方页面文档替换，不符合当前正常页面流程
+的实现边界，不能原样引入 Muse，也不能据其解决现有代理出口或 SDK 429。
+
+该分支已发布 v2.0.0，具有值得借鉴的续期证据：作者分别记录一次新 macOS
+登录获取 173 活动与重启恢复，以及另一个实例在原 token 自然过期 7.026 秒后
+成功读取 174 活动。这是两次试验，不能合并为多日稳定性或 Muse Linux 通过。
+历史刷新试验虽有领取日志和已领取库存，但缺少原 mutation 响应、其他客户端
+未隔离，不能据此确认第一次领取的归因。
+来源：[集成记录](https://github.com/rangermix/TwitchDropsMiner/blob/8fea706e684f7802a9b1d0f273371c3b2e580feb/docs/notes/2026-09-26-native-helper-integration.md)、
+[领取证据限制](https://github.com/rangermix/TwitchDropsMiner/blob/8fea706e684f7802a9b1d0f273371c3b2e580feb/docs/notes/2026-09-25-sdk-cookie-renewal.md)。
