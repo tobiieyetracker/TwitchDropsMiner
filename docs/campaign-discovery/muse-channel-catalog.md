@@ -14,8 +14,11 @@
 
 ```bash
 DISPLAY=:99 env/bin/python check_channel_catalog.py \
-  --cookie-file cookies.jar --channel-login hJune --proxy-env HTTPS_PROXY
+  --cookie-file cookies.jar --channel-login disguisedtoast --proxy-env HTTPS_PROXY
 ```
+
+`--channel-login` 可换成其他当前正在直播、可能有活动的频道，不应固定使用 hJune。
+目录中的 DropsEnabled 和直播标题仅用于选择候选，仍须以 AvailableDrops 实际响应验证。
 
 正常序列最多四个请求：身份验证、GetStreamInfo、AvailableDrops、同账号
 Inventory 对照。只查询一个显式频道，不自动扩展到游戏目录，不重试，不观看、
@@ -74,7 +77,39 @@ Muse 随后在保留原分支的 `codex/catalog-reviewed-2958218` 上执行了�
 
 以上现场结果来自直接读取 Muse 对话回执；完整 JSON 保存在 Muse，尚未在本机
 独立读取。本轮证明修正后的 Python 连接可以完成三次请求，不能仅由前后结果
-断言上一轮连接错误的唯一根因。它也没有验证成功的频道候选列表；不自动复跑。
+断言上一轮连接错误的唯一根因。它也没有验证成功的频道候选列表；当轮未自动复跑。
+
+## 更换主播后的成功验证
+
+用户明确允许改用其他主播后，先通过 Twitch 官方 Rust 目录选出当前候选，
+再让 Muse 复用同一入口，在 `19234d7`（实现为 `2958218`）上查询
+`disguisedtoast`。未改代码、未重复 hJune，首个候选成功后即停止；备选
+zchum、monstera 均未查询。
+
+Muse 报告为
+`probe-reports/channel-catalog-19234d7-20261001-0114-disguisedtoast.json`：
+
+- 退出码 0，`state=passed`。身份验证、GetStreamInfo、AvailableDrops、
+  Inventory 共四次请求均 HTTP 200，无 challenge、无 429。
+- 频道 `disguisedtoast`（ID `87204022`）正在直播 Rust（游戏 ID `263490`）。
+- AvailableDrops 返回一个真实活动 `Rust Isles SAR`，活动 ID
+  `b7c42d19-0a30-4786-b5d7-8a3f3508541a`；结束时间为
+  `2026-10-04T23:58:59.999Z`，检查时仍在有效期。
+- 该活动返回一个掉宝，ID `3ee31a53-b767-11f1-b841-0a58a9feac02`，
+  要求观看 60 分钟；窗口为 `2026-09-24T18:44:00Z` 至
+  `2026-10-04T23:58:59.999Z`。
+- Inventory 的 `same_account=true`，列出四个进行中活动；ID 差集
+  `new_count=1`，本次 SAR 活动不在该账号原库存中。
+- Cookie、旧领取 journal 和 hJune 报告保留，报告称相关文件 hash 未变；
+  无残留进程、无 cron。此次未观看、未领取、未启动浏览器。
+
+这次现场结果证明 Muse 的纯 Python 频道查询可以发现原 Inventory 未包含的
+新活动，不局限于 hJune。SAR 的活动和掉宝 ID 与此前 Rust Isles AR 不同，
+不能将两次结果当作同一目标的前后状态。它仍是频道范围的发现验证，
+`all_campaigns_verified=false`；未验证该 SAR 活动的观看、领取或参与资格。
+
+上述成功结果经本机直接读取 Muse 对话回执核对；完整 JSON 保存在 Muse，
+尚未在本机独立读取。旧失败报告保留，不用新成功反推旧失败的唯一原因。
 
 完整活动发现仍以 [dashboard 验证记录](muse-campaign-coverage.md) 为准；
 领取仍以 [原生领取验证记录](muse-native-inventory-claim.md) 为准。当前没有
