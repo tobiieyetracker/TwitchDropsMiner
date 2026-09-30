@@ -1,10 +1,11 @@
 # Muse：全天候运行目标与当前下一步
 
-最新状态：Muse 的 `b7ea9ce` 探针已证明 SDK 下载、就绪和两次 integrity token
-签发都完成；随后带 Client-Integrity 的官网活动请求仍被 challenge 拒绝。
-“integrity 请求没有发出”已被推翻，不再重复调查 SDK 主脚本是否下载。
-SDK 域另有 429，其影响尚未确定。下一步只做一次有界的 token 配对与身份比较，
-遇到相关 429 就停止；先读[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。
+最新状态：Muse 按 `a623b25` 交接进行的一次配对探针，约 7 秒内因 SDK 域的
+document HTTP 429 主动结束，未取得可比较的 dashboard / integrity 响应。
+与 `b7ea9ce` 的同类 429 约相隔 15 分钟，两轮均无可解析的 Retry-After。
+这次证实了探针停止机制，没有验证 token 配对或 campaign 可用性。
+**停止同环境复跑，不再按下方旧命令自动启动诊断。** 先保存证据并确认平台支持的
+浏览器访问及常驻运行条件；详见[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。
 
 用户希望以 Python 为运行主体。请同时阅读
 [纯 Python 鉴权实测](PYTHON_AUTH_VALIDATION.md)：Python 裸调 integrity 得到了 token，
@@ -46,15 +47,38 @@ SDK 域另有 429，其影响尚未确定。下一步只做一次有界的 token
   SDK 域有 1 次 document 429 和 1 次 fetch ERR_ABORTED；没有证据证明它们造成拒绝。
   两个第三方证书错误没有阻止上述主脚本完成，也不能据此排除其与 SDK 内部链路的关系。
   完整 JSON 位于 Muse `/tmp/probe_b7ea9ce.json`，Windows 端目前只读到转述。
+- 最新一轮按 `a623b25` 交接执行，退出码 1：SDK fetch #72 于 4208 ms 发出，
+  5548 ms 报 ERR_ABORTED；SDK document #87 于 5361 ms 发出，5844 ms 返回 429。
+  停止前 SDK 主脚本 1/1 和 assets 脚本 73/73 完成；页面状态快照按设计跳过。
+  `dashboard_responses` / `integrity_responses` 均为空，身份及 token 无数据可比。
+  这是用户转述，本机没有取得该轮完整 JSON。空 dashboard 响应数组不能单独证明
+  没发出查询；integrity 请求计数应由其生命周期字段确认。
 - Muse 报告 `~` 之外的数据会在 VM 重启后清空，且代理密码会轮换。
   程序、会话存储和恢复所需文件应放在持久的用户目录；启动时读取当前代理配置。
 - Linux 的 WEB 活动发现、真实进度、领取、自然刷新、重启恢复均未验证。
 
-## 当前应做的验证
+## 当前推进方式
 
-先检查上轮 429 是否带 Retry-After，并遵守等待要求；没有等待时长也不要连续重跑。
-保留已有 Cookie 和本地改动，更新分支后，仅运行下面这次增加了配对信息的探针。
-它不会改网页请求、重写 SDK、换身份或尝试绕过限流。
+本轮配对探针已执行并提前停止，不需要再发一轮相同请求。两次 429 不能推断恢复
+时间、服务端拒绝原因或永久不可用；也没有依据指定再等某个时长就一定可以成功。
+
+1. 在 Muse 本地把已有脱敏报告从 `/tmp` 保存到持久用户目录，附提交、执行时间和
+   退出码，保留 Cookie 与本地改动。不要另抓含凭据的网络转储。
+2. 整理已有证据，供用户向平台确认受支持的浏览器出口、相关网站访问与云主机持续
+   运行条件。Chrome 直连失败和 SDK 429 分别记录，不把它们合并为已证明的根因。
+   不要求平台承诺或解释 Twitch 未公开的 token 判定；这里只确认平台能支持的条件。
+3. 平台给出恢复信息或出现明确的新诊断变量后，再决定是否进行一次有目的的验证。
+   不取消 429 停止规则，不通过重换身份或指纹取得样本。旧 `b7ea9ce` 脱敏 JSON
+   没保存 token 配对关系及签发身份，无法事后补算，不应为此再要求用户传凭据。
+4. 若现平台无法提供所需运行条件，再评估由 Muse 管理另一台可持续运行的主机。
+   新主机仍须通过官网查询、矿机进度/领取、自然刷新和恢复验收，不能保证迁移即成功。
+
+当前环境尚不能承担已验证的全天候任务；纯 Python 的完整性获取和长期刷新也仍未
+找到已验证方案。继续维护候选补丁，但不把探针停止正常当作功能修复完成。
+
+## 已有探针说明（待运行条件变化后使用）
+
+以下保留操作与字段说明，不是要求 Muse 当前再执行一次。
 
 现有矿机已经由 Python 请求 GQL、由网页取得完整性凭据，不需要重写这个结构。
 新脚本 `check_campaign_auth.py` 单独验证这条链路，不导入 Tk、不启动矿机或观看/领取。
@@ -108,7 +132,7 @@ DISPLAY=:99 python check_campaign_auth.py --cookie-file ./cookies.jar --channel 
   请求的身份和完整性头，单独发送一次 ViewerDropsDashboard。不会重发原批次的其他操作。
   若官网始终失败，此项不会执行；`no_accepted_website_dashboard` 连同前述状态用于定位。
 
-请回传完整脱敏 JSON 和退出码，不提供凭据。重点比较被拒 dashboard 的
+未来具备新条件、决定复验时，回传完整脱敏 JSON 和退出码，不提供凭据。重点比较被拒 dashboard 的
 `integrity_matches`、对应 `integrity_responses` 的身份、相对时间，以及 `rate_limits`。
 若出现相关 429，遵守等待要求并停止自动复跑。若 token 能配对且已观察的身份一致，
 仍被拒绝，就记录这一边界；没有新变量或证据时，不再重复同环境探针或改浏览器指纹。

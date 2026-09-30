@@ -4,11 +4,13 @@
 自动领取。本文的只读检查是前期验证，不是最终交付范围。后续任务和最新阻塞见
 [CLOUD_OPERATION.md](CLOUD_OPERATION.md)，不要继续将“本次不观看、不领取”作为永久限制。
 
-最新进展：`b7ea9ce` 探针已在 Muse 确认 SDK 加载及就绪、两次完整性请求返回 token，
-但带 Client-Integrity 的官网活动查询仍被拒绝。当前应比较实际 token 配对及签发身份，
-见[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。上轮 SDK 域还有
-429；先遵守 Retry-After，再按 CLOUD_OPERATION.md 做一次有界验证。新版遇到相关 429
-会中止，不自动复跑。以下矿机交互登录步骤仅适用于有可用桌面的环境。
+最新进展：`a623b25` 配对探针已运行，约 7 秒因 SDK document 429 按设计结束，
+尚无 token 配对或身份比较数据。同环境约间隔 15 分钟的两轮均出现此类 429，
+没有可解析的等待时长；停止相同探针复跑。按 CLOUD_OPERATION.md 保存现有证据、
+确认平台支持的访问及常驻条件，条件变化后再决定复验。
+`b7ea9ce` 曾收到 token 但活动仍被拒的结论不变，原因未明；
+见[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。
+以下矿机交互登录步骤仅适用于有可用桌面的环境。
 
 请在用户实际运行矿机的 Linux 环境验证这份候选补丁，并根据真实失败修正。
 先读本文、[CAMPAIGN_DISCOVERY.md](CAMPAIGN_DISCOVERY.md) 和

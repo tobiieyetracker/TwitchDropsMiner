@@ -106,6 +106,13 @@ as an absent token. The final SDK snapshot is explicitly timed after network fre
 See [the binding evidence and next verification](docs/campaign-discovery/twitch-integrity-binding.md).
 Muse also observed an SDK-domain 429 and an aborted fetch. Their effect on the
 rejection is unproven. This update does not establish a fix or a server-side cause.
+The subsequent Muse run following the `a623b25` handoff stopped at an SDK document
+429 after about seven seconds, before any comparable dashboard/issuance responses
+were captured. It confirms the stop condition, not campaign functionality. Do not
+repeat the unchanged probe; preserve existing reports and establish supported
+platform access and continuous-runtime conditions as described in the cloud handoff.
+The earlier redacted JSON did not retain issuance identity or token equality data,
+so it cannot retrospectively answer the correlation question.
 
 ## Recovery and limits
 
