@@ -22,7 +22,7 @@ from channel import Channel
 from websocket import WebsocketPool
 from inventory import DropsCampaign
 from gql_recovery import CampaignAccessError, recover_challenges, validate_campaign_response
-from web_session import TwitchWebSession
+from web_session import TwitchWebSession, WebCredentials
 from exceptions import (
     ExitRequest,
     GQLException,
@@ -114,6 +114,40 @@ class _AuthState:
                 jar.clear()
                 COOKIES_PATH.unlink(missing_ok=True)
 
+    def _apply_web_credentials(self, credentials: WebCredentials) -> None:
+        first_login = not self._logged_in.is_set()
+        self.access_token = credentials.access_token
+        self.user_id = credentials.user_id
+        self.device_id = credentials.headers["X-Device-Id"]
+        self.session_id = credentials.headers.get("Client-Session-Id", "")
+        self._twitch._client_type = ClientInfo(
+            ClientType.WEB.CLIENT_URL,
+            credentials.headers["Client-Id"],
+            credentials.headers["User-Agent"],
+        )
+        if first_login:
+            self._twitch.gui.login.update(_("gui", "login", "logged_in"), self.user_id)
+        self._twitch.gui.help._invalidate_button.config(state="normal")
+        self._logged_in.set()
+
+    async def _login_in_chrome(self) -> str:
+        """Wait for the Login button, then bind a Chrome Twitch session to this auth state."""
+        await self._twitch.gui.login.ask_for_browser_login()
+        self._twitch._client_type = ClientType.WEB
+        if self._twitch._session is not None:
+            # Ignore cookies already loaded for the device client, but leave cookies.jar intact.
+            self._twitch._session.cookie_jar.clear()
+        self._twitch._web_session = TwitchWebSession(
+            channel="chrome",
+            proxy=str(self._twitch.settings.proxy) if self._twitch.settings.proxy else "",
+            notify=self._twitch.print,
+        )
+        credentials = await self._twitch.gui.coro_unless_closed(
+            self._twitch._web_session.start()
+        )
+        self._apply_web_credentials(credentials)
+        return credentials.access_token
+
     def clear(self) -> None:
         self._delattrs(
             "user_id",
@@ -160,10 +194,8 @@ class _AuthState:
                     # }
                     response_json: JsonType = await response.json()
                     if "device_code" not in response_json:
-                        raise LoginException(
-                            "Twitch did not issue a device code for this client. "
-                            "Use --browser-auth to sign in with the web client."
-                        )
+                        logger.info("Device login unavailable; offering browser sign-in")
+                        return await self._login_in_chrome()
                     device_code: str = response_json["device_code"]
                     user_code: str = response_json["user_code"]
                     interval: int = response_json["interval"]
@@ -373,21 +405,8 @@ class _AuthState:
 
     async def _validate(self):
         if (web_session := self._twitch._web_session) is not None:
-            first_login = not self._logged_in.is_set()
             credentials = await self._twitch.gui.coro_unless_closed(web_session.start())
-            self.access_token = credentials.access_token
-            self.user_id = credentials.user_id
-            self.device_id = credentials.headers["X-Device-Id"]
-            self.session_id = credentials.headers.get("Client-Session-Id", "")
-            self._twitch._client_type = ClientInfo(
-                ClientType.WEB.CLIENT_URL,
-                credentials.headers["Client-Id"],
-                credentials.headers["User-Agent"],
-            )
-            if first_login:
-                self._twitch.gui.login.update(_("gui", "login", "logged_in"), self.user_id)
-            self._twitch.gui.help._invalidate_button.config(state="normal")
-            self._logged_in.set()
+            self._apply_web_credentials(credentials)
             return
         if not hasattr(self, "session_id"):
             self.session_id = create_nonce(CHARS_HEX_LOWER, 16)
@@ -417,6 +436,10 @@ class _AuthState:
                 cookie = jar.filter_cookies(client_info.CLIENT_URL)
                 if "auth-token" not in cookie:
                     self.access_token = await self._oauth_login()
+                    if self._logged_in.is_set():
+                        # Browser login already installed a WEB identity. Do not
+                        # put its token into the device client's cookie jar.
+                        return
                     cookie["auth-token"] = self.access_token
                 elif not hasattr(self, "access_token"):
                     logger.info("Restoring session from cookie")
@@ -440,6 +463,12 @@ class _AuthState:
             else:
                 raise LoginException("Twitch could not validate the login token")
             if validate_response["client_id"] != client_info.CLIENT_ID:
+                if validate_response["client_id"] == ClientType.WEB.CLIENT_ID:
+                    # A saved web token belongs to the browser flow; keep it untouched
+                    # and let the user reopen a fresh web session in Chrome.
+                    self._delattrs("access_token", "user_id")
+                    await self._login_in_chrome()
+                    return
                 # A valid token for another client is not an expired login. Do not
                 # discard it or silently replace it by starting a new device flow.
                 self._delattrs("access_token", "user_id")

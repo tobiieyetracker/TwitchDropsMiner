@@ -83,10 +83,14 @@ The inventory tab and the reported campaign count can be inspected before
 closing the application. Remove `--check-campaigns` to use the normal miner flow
 after verification.
 
-The default app/device authentication remains available without `--browser-auth`.
-If Twitch rejects that client or its campaign queries, the error now points to
-the web session option instead of showing `KeyError: device_code` or an empty
-campaign list.
+Without `--browser-auth`, the app first tries its existing device-login flow.
+If Twitch returns no device code, the login panel now enables its Login button;
+clicking it opens Chrome and starts an isolated WEB session. This is the
+fallback intended for the Windows executable. To open the browser immediately
+from the command line, use `--browser-auth --browser-channel chrome`.
+If the device token is valid but Twitch still rejects a campaign query, the
+miner reports that browser authentication is needed instead of showing
+`KeyError: device_code` or an empty campaign list.
 If a valid saved token belongs to a different client, authentication stops with
 an explicit error and preserves `cookies.jar`, including during shutdown. It
 does not replace that token by starting a device login. This protects imported
@@ -171,12 +175,12 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (153 passed, including cookie
+Run `python -m pytest -q tests` for the offline suite (155 passed, including cookie
 preservation and the standalone diagnostic's identity checks, read-only batch
 extraction, network lifecycle observation, issuance/use correlation, cancellation,
-429 stop conditions, redacted output and AvailableDrops null/empty handling through
-single-channel and bulk checks). Remaining:
+429 stop conditions, redacted output, AvailableDrops null/empty handling, and the
+Login-button fallback from an unavailable device code to Chrome). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
-rendering, plus a longer run through natural token expiry. No root cause was
-established for the failed Edge sign-in; browser protections were not changed.
+rendering, plus a longer run through natural token expiry. The new fallback awaits
+a real Chrome sign-in; it does not alter browser protections or reuse cookies.jar.
 An account with no eligible campaigns can legitimately return `[]`.

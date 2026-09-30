@@ -35,7 +35,7 @@ document HTTP 429 主动结束，未取得可比较的 dashboard / integrity 响
 
 - Ubuntu 24.04.5 LTS / x86_64 / Python 3.12.3；早期验证提交为 `d0c2a9e`，
   后续已确认在 `aa6b215` 上测试代理修正。
-- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 153 项通过，
+- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 155 项离线测试通过，
   不能视作 Muse 已运行新增测试。
 - Chrome for Testing 154.0.8037.92 安装于 `/opt/chrome-linux64`，
   `/opt/google/chrome/chrome` 是对应软链接；`channel="chrome"` 可以找到并启动浏览器。
@@ -175,7 +175,8 @@ Cookie 并删除原文件，再启动设备登录。现在对此明确报错并�
 Cookie 保护提交的 7 项回归测试使用临时文件和模拟验证响应；当时 63 项离线测试通过。
 新增独立探针后为 78 项通过，补齐请求生命周期观测后为 85 项通过；
 签发关联、解析取消及 429 中止测试加入后为 126 项通过；
-本轮增加 27 项 AvailableDrops 传输／调用方回归测试后为 153 项通过。Linux 实效仍需 Muse 实测。
+本轮增加 27 项 AvailableDrops 和 2 项 Chrome 登录回退回归测试后为 155 项通过。
+Linux／Windows 上的实效仍需分别实测。
 
 ## 已完成的代理认证检查（历史步骤）
 

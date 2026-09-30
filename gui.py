@@ -595,6 +595,12 @@ class LoginForm:
                 continue
             return login_data
 
+    async def ask_for_browser_login(self) -> None:
+        self.update(_("gui", "login", "required"), None)
+        self._manager.grab_attention(sound=False)
+        self._manager.print("Click Login to open Twitch in Google Chrome.")
+        await self.wait_for_login_press()
+
     async def ask_enter_code(self, page_url: URL, user_code: str) -> None:
         self.update(_("gui", "login", "required"), None)
         # ensure the window isn't hidden into tray when this runs

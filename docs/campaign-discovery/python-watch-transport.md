@@ -33,8 +33,10 @@ Muse 报告 `oilrats247`、`streamerhouse` 在直播，AvailableDrops 均为 0�
 单频道调用不再吞掉这些异常或明确的 integrity challenge，批量检查不再将缺失频道结果默认成空列表。
 静默 null 不会触发 integrity 刷新，也不用于推断错误原因。GetStreamInfo 的离线／无用户早退保持不变。
 这些改动避免错误的“无活动”结论，本身不提供新的活动发现来源。
-新增 27 项离线回归测试通过，全套 153 项通过；覆盖真实 `Twitch.gql_request()` 的模拟传输，
-以及单频道和批量调用、null／空数组区别、异常传播与不误触发刷新。它们不是 Twitch 实服验证。
+新增 27 项离线回归测试通过，全套 155 项通过；覆盖真实 `Twitch.gql_request()` 的模拟传输，
+以及单频道和批量调用、null／空数组区别、异常传播与不误触发刷新。另有 2 项登录回退测试，
+确认 Twitch 不签发 device code 时，点击 Login 会切到 Chrome WEB 身份并保留 `cookies.jar`。
+这些都不是 Twitch 实服验证。
 
 ## 官网观察到的候选对照
 

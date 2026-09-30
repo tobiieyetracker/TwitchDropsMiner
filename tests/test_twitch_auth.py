@@ -2,7 +2,7 @@ import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
 import pytest
@@ -11,6 +11,7 @@ import twitch
 from constants import ClientType
 from exceptions import LoginException
 from twitch import Twitch, _AuthState
+from web_session import WebCredentials
 
 
 @pytest.fixture
@@ -70,7 +71,7 @@ def valid_token(client_id=ClientType.ANDROID_APP.CLIENT_ID):
     return 200, {"client_id": client_id, "user_id": "42"}
 
 
-@pytest.mark.parametrize("issuer", [ClientType.WEB.CLIENT_ID, "other-test-client"])
+@pytest.mark.parametrize("issuer", ["other-test-client"])
 def test_valid_foreign_cookie_survives_validation_retry_and_shutdown(cookie_path, issuer, caplog):
     caplog.set_level("INFO", logger="TwitchDrops")
 
@@ -101,6 +102,44 @@ def test_valid_foreign_cookie_survives_validation_retry_and_shutdown(cookie_path
 
     asyncio.run(scenario())
     assert "saved-test-token" not in caplog.text
+
+
+def test_saved_web_token_offers_chrome_without_overwriting_cookies(cookie_path):
+    async def passthrough(coro):
+        return await coro
+
+    async def scenario():
+        client = saved_client(cookie_path, [valid_token(ClientType.WEB.CLIENT_ID)])
+        original = cookie_path.read_bytes()
+        client.settings.proxy = None
+        client.print = Mock()
+        client.gui.coro_unless_closed = passthrough
+        client.gui.login.ask_for_browser_login = AsyncMock()
+        web_credentials = WebCredentials(789, {
+            "Authorization": "OAuth web-test-token",
+            "Client-Id": ClientType.WEB.CLIENT_ID,
+            "User-Agent": "Chrome test agent",
+            "X-Device-Id": "web-device",
+            "Client-Session-Id": "web-session",
+        })
+        web_session = SimpleNamespace(
+            start=AsyncMock(return_value=web_credentials), close=AsyncMock(),
+        )
+        try:
+            with patch("twitch.TwitchWebSession", return_value=web_session) as make_web:
+                await client._auth_state.validate()
+            make_web.assert_called_once_with(channel="chrome", proxy="", notify=client.print)
+            web_session.start.assert_awaited_once()
+            client.gui.login.ask_for_browser_login.assert_awaited_once()
+            assert client._auth_state.user_id == 789
+            assert client._auth_state._logged_in.is_set()
+            assert client._client_type.CLIENT_ID == ClientType.WEB.CLIENT_ID
+            assert cookie_path.read_bytes() == original
+        finally:
+            await client.shutdown()
+        assert cookie_path.read_bytes() == original
+
+    asyncio.run(scenario())
 
 
 def test_matching_saved_login_is_used_and_cookies_still_saved_at_shutdown(cookie_path):
