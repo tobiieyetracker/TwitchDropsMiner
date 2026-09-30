@@ -1602,6 +1602,8 @@ class Twitch:
 
     def _campaign_discovery_games(self) -> list[str]:
         """Return the explicit game allowlist for a bounded channel scan."""
+        if getattr(self.settings, "campaign_channel_only", False):
+            return []
         requested = getattr(self.settings, "campaign_game", None) or []
         if not requested:
             requested = getattr(self.settings, "priority", [])

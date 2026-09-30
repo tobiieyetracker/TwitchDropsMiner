@@ -29,15 +29,16 @@ campaign request stops the scan rather than silently retrying under another
 identity.
 
 ```bash
-DISPLAY=:99 python main.py --smartbox-auth --check-campaigns --cookie-file cookies.jar.bak --campaign-web-cookie-file cookies.jar --campaign-channel rainbow6
+DISPLAY=:99 python main.py --smartbox-auth --check-campaigns --cookie-file cookies.jar.bak --campaign-web-cookie-file cookies.jar --campaign-channel rainbow6 --campaign-channel-only
 ```
 
 `--cookie-file` is accepted only with `--check-campaigns`. That mode reads the
 existing cookie jar without saving to it and exits instead of starting a login
 flow when the token is absent, invalid, or belongs to a different client. The
 separate WEB cookie option is read-only and same-account checked. This command
-checks Inventory and `rainbow6`; configured Priority games may also be scanned.
-To broaden the scan, add one or more `--campaign-game "Game Name"` arguments;
+checks Inventory and `rainbow6` only; `--campaign-channel-only` suppresses the
+configured Priority games. To broaden a later scan, omit that flag and add one
+or more `--campaign-game "Game Name"` arguments;
 each adds at most ten high-ranked channels. Results retain sources at campaign
 and drop level, merge by campaign ID and drop ID, and use Inventory as the source
 of truth for progress and account-link state. A channel's null `AvailableDrops`

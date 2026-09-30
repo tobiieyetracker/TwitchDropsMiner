@@ -47,6 +47,15 @@ def normalize(raw, channel_id, login):
     )
 
 
+def test_channel_only_flag_suppresses_priority_game_expansion():
+    client = Twitch.__new__(Twitch)
+    client.settings = SimpleNamespace(
+        campaign_channel_only=True, campaign_game=[], priority=["Rainbow Six Siege"]
+    )
+
+    assert client._campaign_discovery_games() == []
+
+
 def test_candidate_keeps_unknown_account_state_and_channel_provenance():
     item = normalize(campaign("drop-a"), 11, "streamer_a")
 

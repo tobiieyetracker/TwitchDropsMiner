@@ -74,6 +74,7 @@ if __name__ == "__main__":
         smartbox_auth: bool
         cookie_file: str | None
         campaign_web_cookie_file: str | None
+        campaign_channel_only: bool
         campaign_game: list[str]
         campaign_channel: list[str]
 
@@ -163,6 +164,10 @@ if __name__ == "__main__":
             "Also query AvailableDrops for this exact channel when the dashboard is "
             "unavailable; may be repeated. This adds coverage only for these channels."
         ),
+    )
+    parser.add_argument(
+        "--campaign-channel-only", action="store_true",
+        help="Scan only explicitly named --campaign-channel values, not configured Priority games",
     )
     # undocumented debug args
     parser.add_argument(
