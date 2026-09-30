@@ -7,6 +7,9 @@ import json
 import os
 import re
 import ssl
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -15,6 +18,7 @@ import aiohttp
 from yarl import URL
 
 from check_browser_proxy import error_code
+from integrity_diagnostics import IntegrityAudit
 from web_session import GQL_URL, WEB_URL, WEB_CLIENT_ID, HEADER_NAMES, browser_proxy_settings
 
 
@@ -52,6 +56,48 @@ class ProbeFailure(Exception):
     """Only fixed diagnostic codes, never server messages or credentials."""
 
 
+def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> float | None:
+    """Retain only a delay, never arbitrary response header contents."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if re.fullmatch(r"[0-9]{1,10}", value):
+        return int(value)
+    try:
+        date = parsedate_to_datetime(value)
+        if date.tzinfo is None:
+            return None
+        return max(0, (date - (now or datetime.now(timezone.utc))).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+async def stop_on_rate_limit(awaitable: Any, capture: BrowserCapture, timeout: float | None = None) -> Any:
+    """A relevant 429 takes priority even when a successful read races it."""
+    operation = asyncio.create_task(awaitable)
+    limited = asyncio.create_task(capture.rate_limited.wait())
+    failure = None
+    try:
+        capture.check_rate_limit()
+        done, _ = await asyncio.wait({operation, limited}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        capture.check_rate_limit()
+        if operation in done:
+            result = await operation
+        else:
+            raise asyncio.TimeoutError
+    except Exception as error:
+        failure = error
+    finally:
+        for task in (operation, limited):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(operation, limited, return_exceptions=True)
+    capture.check_rate_limit()
+    if failure is not None:
+        raise failure
+    return result
+
+
 def resource_info(request: Any) -> dict[str, str]:
     url = urlsplit(request.url)
     host = url.hostname
@@ -75,6 +121,21 @@ class NetworkObservation:
         self.closed = False
         self.groups: dict[tuple[str, ...], dict[str, Any]] = {}
         self.integrity: dict[int, tuple[Any, dict[str, Any]]] = {}
+        self.started = time.monotonic()
+        self.requests: dict[int, tuple[Any, dict[str, Any]]] = {}
+
+    def elapsed_ms(self) -> float:
+        return round((time.monotonic() - self.started) * 1000, 3)
+
+    def metadata(self, request: Any) -> dict[str, Any]:
+        key = id(request)
+        if key not in self.requests:
+            # Retain each request until audit completion to prevent id reuse.
+            self.requests[key] = request, {
+                "request_id": len(self.requests) + 1, "started_ms": None,
+                "response_ms": None, "finished_ms": None, "failed_ms": None,
+            }
+        return self.requests[key][1]
 
     def _group(self, request: Any) -> dict[str, Any]:
         info = resource_info(request)
@@ -101,6 +162,7 @@ class NetworkObservation:
     def request(self, request: Any) -> None:
         if self.closed:
             return
+        self.metadata(request)["started_ms"] = self.elapsed_ms()
         self._group(request)["started"] += 1
         if (entry := self._integrity_request(request)) is not None:
             entry["request_seen"] = True
@@ -108,6 +170,7 @@ class NetworkObservation:
     def response(self, response: Any) -> None:
         if self.closed:
             return
+        self.metadata(response.request)["response_ms"] = self.elapsed_ms()
         group = self._group(response.request)
         group["responses"] += 1
         group["http_errors"] += int(response.status >= 400)
@@ -117,6 +180,7 @@ class NetworkObservation:
     def finished(self, request: Any) -> None:
         if self.closed:
             return
+        self.metadata(request)["finished_ms"] = self.elapsed_ms()
         self._group(request)["finished"] += 1
         if (entry := self._integrity_request(request)) is not None:
             entry["finished"] = True
@@ -124,6 +188,7 @@ class NetworkObservation:
     def failed(self, request: Any) -> None:
         if self.closed:
             return
+        self.metadata(request)["failed_ms"] = self.elapsed_ms()
         code = error_code(RuntimeError(request.failure or ""))
         group = self._group(request)
         group["failed"] += 1
@@ -135,13 +200,16 @@ class NetworkObservation:
         if self.closed:
             return
         self.closed = True
+        self.report["network_frozen_ms"] = self.elapsed_ms()
+        for request, entry in self.integrity.values():
+            entry.update(self.metadata(request))
         entries = [entry for _, entry in self.integrity.values()]
         for entry in entries:
             entry["state"] = (
                 "failed" if entry["failed"] else "finished" if entry["finished"] else
                 "awaiting_body" if entry["response_received"] else "awaiting_response"
             )
-        self.report["integrity_requests"] = entries[:20]
+        self.report["integrity_requests"] = sorted(entries, key=lambda entry: entry["request_id"])[:20]
         self.report["integrity_network"] = {
             "requests": sum(entry["request_seen"] for entry in entries),
             "request_methods": {
@@ -239,17 +307,43 @@ class BrowserCapture:
     def __init__(self, token: str, user_id: str, report: dict[str, Any]):
         self.token, self.user_id, self.report = token, user_id, report
         self.ready = asyncio.Event()
+        self.rate_limited = asyncio.Event()
         self.control: tuple[dict[str, Any], dict[str, str]] | None = None
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
-        report.update(dashboard_responses=[], integrity_responses=[], resource_failures=[], page_errors=0)
+        report.update(dashboard_responses=[], integrity_responses=[], resource_failures=[], rate_limits=[], page_errors=0)
         self.network = NetworkObservation(report)
+        self.audit = IntegrityAudit(token)
+
+    def check_rate_limit(self) -> None:
+        if self.rate_limited.is_set():
+            raise ProbeFailure("relevant_rate_limit")
+
+    def issuance_summary(self, response: Any) -> dict[str, Any] | None:
+        if resource_info(response.request)["role"] != "integrity":
+            return None
+        summary = {
+            **self.network.metadata(response.request), "http_status": response.status,
+            "token_returned": None, "body_state": "pending", "headers_state": "pending",
+        }
+        if len(self.report["integrity_responses"]) < 20:
+            self.report["integrity_responses"].append(summary)
+        return summary
 
     def response(self, response: Any) -> None:
         if not self.closed:
             # Record response headers immediately, even if response.json() never completes.
             self.network.response(response)
-            task = asyncio.create_task(self.inspect(response))
+            info = resource_info(response.request)
+            if response.status == 429 and info["host"] in {"k.twitchcdn.net", "gql.twitch.tv"}:
+                self.report["rate_limits"].append({
+                    **self.network.metadata(response.request), **info, "http_status": 429,
+                    "retry_after_seconds": retry_after_seconds(response.headers.get("retry-after")),
+                })
+                self.rate_limited.set()
+            # Create this synchronously so cancellation before the parser starts is visible.
+            summary = self.issuance_summary(response)
+            task = asyncio.create_task(self.inspect(response, summary))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
 
@@ -262,6 +356,7 @@ class BrowserCapture:
             return
         # Keep no URLs, query strings, console messages or request headers.
         self.report["resource_failures"].append({
+            **self.network.metadata(request),
             **resource_info(request),
             "http_status": status,
             "error": error_code(RuntimeError(request.failure or "")) if status is None else None,
@@ -271,19 +366,38 @@ class BrowserCapture:
         if not self.closed:
             self.report["page_errors"] += 1
 
-    async def inspect(self, response: Any) -> None:
+    async def inspect(self, response: Any, summary: dict[str, Any] | None = None) -> None:
         try:
             if response.status >= 400:
                 self.resource_failure(response.request, status=response.status)
             if resource_info(response.request)["role"] == "integrity":
-                summary = {"http_status": response.status, "token_returned": False}
-                if len(self.report["integrity_responses"]) < 20:
-                    self.report["integrity_responses"].append(summary)
+                if summary is None:
+                    summary = self.issuance_summary(response)
+                assert summary is not None
+                body, headers = None, {}
                 try:
-                    body = await response.json()
-                    summary["token_returned"] = isinstance(body, dict) and bool(body.get("token"))
-                except Exception as error:
-                    summary["parse_error"] = error_code(error)
+                    try:
+                        body = await response.json()
+                        summary["body_state"] = "parsed"
+                        summary["token_returned"] = (
+                            isinstance(body, dict) and isinstance(body.get("token"), str) and bool(body["token"])
+                        )
+                    except Exception as error:
+                        summary["body_state"] = "error"
+                        summary["parse_error"] = error_code(error)
+                    try:
+                        headers = {key.lower(): value for key, value in (await response.request.all_headers()).items()}
+                        summary["headers_state"] = "parsed"
+                    except Exception as error:
+                        summary["headers_state"] = "error"
+                        summary["headers_error"] = error_code(error)
+                finally:
+                    for key in ("body_state", "headers_state"):
+                        if summary[key] == "pending":
+                            summary[key] = "cancelled"
+                    self.audit.observe_issuance(summary, headers, body, self.network.metadata(response.request))
+                    if summary["headers_state"] != "parsed":
+                        summary.update(oauth_matches=None, web_client_matches=None)
             if response.url != GQL_URL:
                 return
             operations = response.request.post_data_json
@@ -300,6 +414,7 @@ class BrowserCapture:
                 if payload is None:
                     continue
                 state = {
+                    **self.network.metadata(response.request),
                     "http_status": response.status, **dashboard_state(reply, self.user_id),
                     "oauth_matches": headers.get("authorization") == f"OAuth {self.token}",
                     "web_client_matches": headers.get("client-id") == WEB_CLIENT_ID,
@@ -308,8 +423,9 @@ class BrowserCapture:
                 }
                 if len(self.report["dashboard_responses"]) < 20:
                     self.report["dashboard_responses"].append(state)
+                self.audit.observe_dashboard(state, headers, self.network.metadata(response.request))
                 if (
-                    self.control is None and accepted(state) and state["oauth_matches"]
+                    not self.rate_limited.is_set() and self.control is None and accepted(state) and state["oauth_matches"]
                     and state["web_client_matches"] and state["device_header_present"]
                     and headers.get("user-agent")
                 ):
@@ -329,6 +445,18 @@ class BrowserCapture:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        metadata = {entry["request_id"]: entry for _, entry in self.network.requests.values()}
+        for key in ("integrity_responses", "dashboard_responses", "resource_failures", "rate_limits"):
+            for entry in self.report[key]:
+                entry.update(metadata.get(entry.get("request_id"), {}))
+        for summary in self.report["integrity_responses"]:
+            for key in ("body_state", "headers_state"):
+                if summary[key] == "pending":
+                    summary[key] = "cancelled"
+        self.audit.finalize()
+        for key in ("dashboard_responses", "integrity_responses"):
+            self.report[key].sort(key=lambda entry: entry["request_id"])
+        self.network.requests.clear()
         self.control = None
         self.token = ""
 
@@ -387,25 +515,42 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                         page.on("pageerror", capture.page_error)
                         report["phase"] = "website_dashboard"
                         deadline = asyncio.get_running_loop().time() + seconds
-                        await page.goto(WEB_URL, wait_until="domcontentloaded", timeout=seconds * 1000)
+                        await stop_on_rate_limit(
+                            page.goto(WEB_URL, wait_until="domcontentloaded", timeout=seconds * 1000), capture,
+                        )
                         try:
-                            await asyncio.wait_for(
-                                capture.ready.wait(), max(0, deadline - asyncio.get_running_loop().time()),
+                            await stop_on_rate_limit(
+                                capture.ready.wait(), capture,
+                                max(0, deadline - asyncio.get_running_loop().time()),
                             )
                         except asyncio.TimeoutError:
                             raise ProbeFailure("no_accepted_website_dashboard") from None
                         # Ensure the imported login did not change before the control read.
-                        cookies = await context.cookies("https://www.twitch.tv")
+                        cookies = await stop_on_rate_limit(context.cookies("https://www.twitch.tv"), capture)
                         if next((c["value"] for c in cookies if c["name"] == "auth-token"), None) != token:
                             raise ProbeFailure("browser_login_changed")
                         assert capture.control is not None
                         payload, headers = capture.control
                         report["phase"] = "python_dashboard"
-                        async with http.post(
-                            GQL_URL, json=payload, headers=headers, proxy=proxy,
-                            allow_redirects=False, ssl=tls,
-                        ) as response:
-                            result = {"http_status": response.status, **dashboard_state(await response.json(), user_id)}
+
+                        async def python_control() -> dict[str, Any]:
+                            capture.check_rate_limit()
+                            started_ms = capture.network.elapsed_ms()
+                            async with http.post(
+                                GQL_URL, json=payload, headers=headers, proxy=proxy,
+                                allow_redirects=False, ssl=tls,
+                            ) as response:
+                                if response.status == 429:
+                                    report["rate_limits"].append({
+                                        "source": "python_control", "host": "gql.twitch.tv", "http_status": 429,
+                                        "started_ms": started_ms, "response_ms": capture.network.elapsed_ms(),
+                                        "retry_after_seconds": retry_after_seconds(response.headers.get("retry-after")),
+                                    })
+                                    capture.rate_limited.set()
+                                    capture.check_rate_limit()
+                                return {"http_status": response.status, **dashboard_state(await response.json(), user_id)}
+
+                        result = await stop_on_rate_limit(python_control(), capture)
                         report["python_dashboard"] = result
                         if not accepted(result):
                             raise ProbeFailure("python_dashboard_not_accepted")
@@ -413,12 +558,19 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                     finally:
                         try:
                             await capture.close()
-                            if page is not None:
+                            if capture.rate_limited.is_set():
+                                # Close promptly; do not leave SDK requests running for a status snapshot.
+                                report["page_status_error"] = "skipped_after_rate_limit"
+                            elif page is not None:
+                                timing = {"started_ms": capture.network.elapsed_ms(), "after_network_freeze": True}
+                                report["page_status_timing"] = timing
                                 try:
                                     # Read normal SDK status only; do not load, configure or replace it.
                                     report["page_status"] = await asyncio.wait_for(page.evaluate(PAGE_STATUS), 5)
                                 except Exception as error:
                                     report["page_status_error"] = error_code(error)
+                                finally:
+                                    timing["finished_ms"] = capture.network.elapsed_ms()
                         finally:
                             await browser.close()
             finally:

@@ -35,7 +35,7 @@ DENIED = {
 
 def response(body, *, operations=QUERY, headers=HEADERS, status=200, url=probe.GQL_URL):
     return SimpleNamespace(
-        url=url, status=status, json=AsyncMock(return_value=body),
+        url=url, status=status, headers={}, json=AsyncMock(return_value=body),
         request=SimpleNamespace(
             post_data_json=operations, all_headers=AsyncMock(return_value=headers), url=url,
             method="POST", resource_type="fetch", failure=None,
@@ -70,24 +70,28 @@ def test_capture_reports_resource_and_integrity_failures_without_secrets():
             {"token": INTEGRITY}, url="https://gql.twitch.tv/integrity",
         ))
         await capture.inspect(response(DENIED))
-        assert report["resource_failures"][0] == {
+        failure = report["resource_failures"][0]
+        assert {key: failure[key] for key in ("host", "http_status", "error", "resource_type", "role")} == {
             "host": "assets.twitch.tv", "http_status": None, "error": "ERR_CERT_AUTHORITY_INVALID",
             "resource_type": "script", "role": "page_resource",
         }
-        assert report["integrity_responses"] == [{"http_status": 200, "token_returned": True}]
+        issued = report["integrity_responses"][0]
+        assert issued["http_status"] == 200 and issued["token_returned"] is True
+        assert issued["body_state"] == issued["headers_state"] == "parsed"
+        assert issued["oauth_matches"] and issued["web_client_matches"]
         invalid_json = response({}, status=503, url="https://gql.twitch.tv/integrity")
         invalid_json.json.side_effect = ValueError("must-not-print")
         await capture.inspect(invalid_json)
-        assert report["integrity_responses"][-1] == {
-            "http_status": 503, "token_returned": False, "parse_error": "ValueError",
-        }
+        failed = report["integrity_responses"][-1]
+        assert failed["http_status"] == 503 and failed["token_returned"] is None
+        assert failed["body_state"] == "error" and failed["parse_error"] == "ValueError"
         assert report["page_errors"] == 1
         assert report["dashboard_responses"][0]["integrity_failure"] is True
         assert not capture.ready.is_set()
         assert capture.control is None
+        await capture.close()
         output = json.dumps(report)
         assert all(secret not in output for secret in (TOKEN, INTEGRITY, "must-not-print", "fixture-device"))
-        await capture.close()
 
     asyncio.run(scenario())
 
@@ -214,19 +218,39 @@ def test_unsupported_payloads_cannot_be_used_for_python_control(mutation):
     assert probe.persisted_dashboard(query) is None
 
 
-@pytest.mark.parametrize("case", ["success", "denied", "wrong_oauth", "wrong_issuer", "changed_login", "python_denied", "launch_failed"])
+@pytest.mark.parametrize("case", [
+    "success", "denied", "wrong_oauth", "wrong_issuer", "changed_login", "python_denied", "launch_failed",
+    "sdk_rate_limit", "gql_rate_limit", "navigation_rate_limit", "cookie_rate_limit", "python_rate_limit",
+])
 def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, tmp_path, case):
     import playwright.async_api
 
     callbacks = {}
     headers = {**HEADERS, "Authorization": "OAuth wrong-fixture-token"} if case == "wrong_oauth" else HEADERS
 
+    def rate_limit():
+        url = probe.GQL_URL if case == "gql_rate_limit" else "https://k.twitchcdn.net/fixture-secret"
+        limited = response({}, status=429, url=url)
+        limited.headers = {"retry-after": "120", "set-cookie": "fixture-secret"}
+        callbacks["request"](limited.request)
+        callbacks["response"](limited)
+        callbacks["requestfinished"](limited.request)
+
     async def navigate(*args, **kwargs):
         reply = response(DENIED if case == "denied" else SUCCESS, headers=headers)
         callbacks["request"](reply.request)
         callbacks["response"](reply)
         callbacks["requestfinished"](reply.request)
+        if case in {"sdk_rate_limit", "gql_rate_limit", "navigation_rate_limit"}:
+            rate_limit()
+        if case == "navigation_rate_limit":
+            await asyncio.Event().wait()
         await asyncio.sleep(0)
+
+    async def cookies(*args):
+        if case == "cookie_rate_limit":
+            rate_limit()
+        return [{"name": "auth-token", "value": "changed" if case == "changed_login" else TOKEN}]
 
     page = SimpleNamespace(
         on=lambda event, callback: callbacks.update({event: callback}), goto=AsyncMock(side_effect=navigate),
@@ -235,7 +259,7 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
     context = SimpleNamespace(
         on=lambda event, callback: callbacks.update({event: callback}),
         add_cookies=AsyncMock(), new_page=AsyncMock(return_value=page),
-        cookies=AsyncMock(return_value=[{"name": "auth-token", "value": "changed" if case == "changed_login" else TOKEN}]),
+        cookies=AsyncMock(side_effect=cookies),
     )
     browser = SimpleNamespace(
         version="fixture-browser", new_context=AsyncMock(return_value=context), close=AsyncMock(),
@@ -273,7 +297,9 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
         @asynccontextmanager
         async def post(self, url, **kwargs):
             post_calls.append((url, kwargs))
-            yield response(DENIED if case == "python_denied" else SUCCESS)
+            reply = response(DENIED if case == "python_denied" else SUCCESS, status=429 if case == "python_rate_limit" else 200)
+            reply.headers = {"retry-after": "120"}
+            yield reply
 
     monkeypatch.setattr(aiohttp, "ClientSession", lambda **kwargs: Http())
 
@@ -283,7 +309,7 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
         jar.update_cookies({"auth-token": TOKEN}, URL("https://www.twitch.tv/"))
         jar.save(path)
         original = path.read_bytes()
-        status, report = await probe.check(path, "chrome", proxy, 0.05)
+        status, report = await asyncio.wait_for(probe.check(path, "chrome", proxy, 0.05), 2)
         assert status == (0 if case == "success" else 1)
         assert path.read_bytes() == original
         if case == "wrong_issuer":
@@ -300,11 +326,19 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
                 "secure": True, "sameSite": "Lax",
             }])
             browser.close.assert_awaited_once()
-            page.evaluate.assert_awaited_once_with(probe.PAGE_STATUS)
-            assert report["network_summary"][0]["started"] == 1
-            assert report["network_summary"][0]["finished"] == 1
+            if "rate_limit" in case:
+                page.evaluate.assert_not_awaited()
+                assert report["error"] == "relevant_rate_limit"
+                assert report["page_status_error"] == "skipped_after_rate_limit"
+                assert report["rate_limits"][0]["retry_after_seconds"] == 120
+            else:
+                page.evaluate.assert_awaited_once_with(probe.PAGE_STATUS)
+                assert report["page_status_timing"]["after_network_freeze"] is True
+                assert report["page_status_timing"]["started_ms"] >= report["network_frozen_ms"]
+                assert report["network_summary"][0]["started"] == 1
+                assert report["network_summary"][0]["finished"] == 1
             assert report["integrity_network"]["requests"] == 0
-        if case in {"success", "python_denied"}:
+        if case in {"success", "python_denied", "python_rate_limit"}:
             assert len(post_calls) == 1
             url, options = post_calls[0]
             assert url == probe.GQL_URL and options["json"] == QUERY

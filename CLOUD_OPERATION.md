@@ -1,10 +1,10 @@
 # Muse：全天候运行目标与当前下一步
 
-最新状态：Muse 的 `656add8` 探针已确认 WEB Cookie 导入及网页身份匹配成功，
-但官网活动查询仍被 integrity 拒绝。旧版 `integrity_responses: []` 不能证明没有发出
-请求；新版已补请求生命周期、资源类型和 SDK 状态观测。
-已有 bundle 中的关键 SDK 脚本来自 `k.twitchcdn.net`，不能只盯着图片 CDN。
-先读[启动依赖证据和针对性验证步骤](docs/campaign-discovery/twitch-sdk-dependency.md)。
+最新状态：Muse 的 `b7ea9ce` 探针已证明 SDK 下载、就绪和两次 integrity token
+签发都完成；随后带 Client-Integrity 的官网活动请求仍被 challenge 拒绝。
+“integrity 请求没有发出”已被推翻，不再重复调查 SDK 主脚本是否下载。
+SDK 域另有 429，其影响尚未确定。下一步只做一次有界的 token 配对与身份比较，
+遇到相关 429 就停止；先读[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。
 
 用户希望以 Python 为运行主体。请同时阅读
 [纯 Python 鉴权实测](PYTHON_AUTH_VALIDATION.md)：Python 裸调 integrity 得到了 token，
@@ -23,7 +23,7 @@
 
 - Ubuntu 24.04.5 LTS / x86_64 / Python 3.12.3；早期验证提交为 `d0c2a9e`，
   后续已确认在 `aa6b215` 上测试代理修正。
-- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 85 项通过，
+- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 126 项通过，
   不能视作 Muse 已运行新增测试。
 - Chrome for Testing 154.0.8037.92 安装于 `/opt/chrome-linux64`，
   `/opt/google/chrome/chrome` 是对应软链接；`channel="chrome"` 可以找到并启动浏览器。
@@ -41,11 +41,20 @@
 - `656add8` 探针报告 Cookie 导入成功：网页 OAuth、WEB client-id 和用户匹配，
   dashboard 明确返回 integrity challenge，且请求未携带 Client-Integrity。
   Python 对照被跳过。资源存在证书错误，但旧探针没有记录足够的资源分类信息。
+- `b7ea9ce` 后续报告：SDK 主脚本 1/1、assets 脚本 125/125 下载完成，SDK ready；
+  2 次 integrity POST 均 HTTP 200 并返回 token。第二次 dashboard 带完整性头仍被拒。
+  SDK 域有 1 次 document 429 和 1 次 fetch ERR_ABORTED；没有证据证明它们造成拒绝。
+  两个第三方证书错误没有阻止上述主脚本完成，也不能据此排除其与 SDK 内部链路的关系。
+  完整 JSON 位于 Muse `/tmp/probe_b7ea9ce.json`，Windows 端目前只读到转述。
 - Muse 报告 `~` 之外的数据会在 VM 重启后清空，且代理密码会轮换。
   程序、会话存储和恢复所需文件应放在持久的用户目录；启动时读取当前代理配置。
 - Linux 的 WEB 活动发现、真实进度、领取、自然刷新、重启恢复均未验证。
 
 ## 当前应做的验证
+
+先检查上轮 429 是否带 Retry-After，并遵守等待要求；没有等待时长也不要连续重跑。
+保留已有 Cookie 和本地改动，更新分支后，仅运行下面这次增加了配对信息的探针。
+它不会改网页请求、重写 SDK、换身份或尝试绕过限流。
 
 现有矿机已经由 Python 请求 GQL、由网页取得完整性凭据，不需要重写这个结构。
 新脚本 `check_campaign_auth.py` 单独验证这条链路，不导入 Tk、不启动矿机或观看/领取。
@@ -70,24 +79,40 @@ DISPLAY=:99 python check_campaign_auth.py --cookie-file ./cookies.jar --channel 
 - `web_token_valid`：token 有效且签发方为 WEB；不等于浏览器已经使用它。
 - `dashboard_responses`：官网响应的 OAuth/客户端/账号匹配结果、活动字段类型和数量、
   是否携带完整性头、是否收到明确的完整性拒绝。静默 `null` 不被标成已证明的 integrity。
+  `integrity_token_observation` 为 absent、matched 或 unobserved；matched 的
+  `integrity_matches` 列出所有同值 token 的签发序号及六项 `identity_matches`。
+  字段缺失为 null，不能当成一致。同值 token 多次签发时保留所有匹配，不武断指定来源。
+  `response_before_dashboard` 说明签发响应是否早于查询发出；记录的时间相同或缺失为 null。
 - `integrity_network` / `integrity_requests`：本浏览器上下文观察到的完整性请求生命周期。
   requests、responses、finished、failed、awaiting_response、awaiting_body 分开计数；
   详情最多显示 20 条，请求合计不受此限制。计数在关闭浏览器前冻结，不混入清理时的中止。
-- `integrity_responses`：响应体中是否返回 token；最多记录 20 条。
-  此项为空不能推断请求从未发出，应结合前一项判断。
+- `integrity_responses`：响应体中是否返回 token、签发 OAuth/WEB client 是否匹配；
+  最多记录 20 条。`body_state` 区分 parsed/error/cancelled，未成功解析时
+  `token_returned: null`，不误报“没有 token”。`headers_state` 标明头读取是否完成。
+  此项为空不能推断请求从未发出，应结合前一项判断。token 只在内存中比较，不输出或散列。
+- 相关条目的 `request_id` 是本次浏览器观测的整数序号，`*_ms` 为同一起点的相对时间。
+  数组按请求序号排列；异步响应体解析晚完成不会把签发和使用的先后次序颠倒。
+- `rate_limits`：SDK 域或 GQL 的 HTTP 429 和可解析的 `retry_after_seconds`。
+  发生后立即结束本轮，退出码 1、`relevant_rate_limit`；不启动新的 Python 对照，
+  若其已在途则取消等待。Python 对照本身的 429 也会记录。脚本不会自动等待后重试。
 - `network_summary`：按公开主机、浏览器资源类型及用途汇总全部请求的完成、失败、
   HTTP 错误和等待状态。新增识别 `k.twitchcdn.net` 与 `static-cdn.jtvnw.net`。
   图片错误再多也不会遮住后续 SDK 脚本的汇总结果。
 - `resource_failures` / `page_errors`：前 20 条资源失败详情及脚本异常计数。
   页面主站和 GQL 证书正常不等于 SDK 域名可达。输出不含 URL、脚本错误正文或请求头。
 - `page_status`：结束时读取文档状态、SDK 脚本元素/全局对象是否存在以及 SDK 是否就绪。
+  `page_status_timing` 明确它晚于网络冻结，不能证明某个早期请求当时的 SDK 状态。
   不加载或替换 SDK，不修改网页功能开关。页面无法读取时输出脱敏错误类型。
+  遇到相关 429 会跳过快照并及时关闭浏览器，显示 `skipped_after_rate_limit`。
 - `python_dashboard`：仅当官网查询成功、身份匹配且 Cookie 未变时，Python 才复制该
   请求的身份和完整性头，单独发送一次 ViewerDropsDashboard。不会重发原批次的其他操作。
   若官网始终失败，此项不会执行；`no_accepted_website_dashboard` 连同前述状态用于定位。
 
-请回传 JSON 和退出码，不提供凭据。重点先区分登录身份不匹配、资源加载失败、
-网页已取得完整性 token 但仍被拒绝，以及网页通过而 Python 失败。
+请回传完整脱敏 JSON 和退出码，不提供凭据。重点比较被拒 dashboard 的
+`integrity_matches`、对应 `integrity_responses` 的身份、相对时间，以及 `rate_limits`。
+若出现相关 429，遵守等待要求并停止自动复跑。若 token 能配对且已观察的身份一致，
+仍被拒绝，就记录这一边界；没有新变量或证据时，不再重复同环境探针或改浏览器指纹。
+本轮不估算 token 过期时间，也不解释 Twitch 未公开的服务端判定。
 没有受控对照时，不给 token 贴“低信任”标签，也不从单个错误推断自动化检测。
 
 当前只有诊断脚本实现了一次性导入；矿机的 `--browser-auth` 仍使用空白临时上下文。
@@ -112,7 +137,8 @@ Cookie 并删除原文件，再启动设备登录。现在对此明确报错并�
 
 这项保护本身不增加 WEB Cookie 导入、浏览器会话持久化或完整性恢复能力。
 Cookie 保护提交的 7 项回归测试使用临时文件和模拟验证响应；当时 63 项离线测试通过。
-新增独立探针后为 78 项通过，补齐请求生命周期观测后为 85 项通过；新增观测仍需 Muse 实测。
+新增独立探针后为 78 项通过，补齐请求生命周期观测后为 85 项通过；
+签发关联、解析取消及 429 中止测试加入后为 126 项通过。新增观测仍需 Muse 实测。
 
 ## 已完成的代理认证检查（历史步骤）
 

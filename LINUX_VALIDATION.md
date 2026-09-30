@@ -4,10 +4,11 @@
 自动领取。本文的只读检查是前期验证，不是最终交付范围。后续任务和最新阻塞见
 [CLOUD_OPERATION.md](CLOUD_OPERATION.md)，不要继续将“本次不观看、不领取”作为永久限制。
 
-最新进展：`656add8` 探针已在 Muse 确认 WEB Cookie 导入及网页身份匹配，但官网活动
-查询仍被 integrity 拒绝。新版补齐请求生命周期与 SDK 资源观测，旧版响应列表为空
-不能证明请求未发出。先按 CLOUD_OPERATION.md 运行更新的 `check_campaign_auth.py`，
-以下矿机交互登录步骤仅适用于有可用桌面的环境。
+最新进展：`b7ea9ce` 探针已在 Muse 确认 SDK 加载及就绪、两次完整性请求返回 token，
+但带 Client-Integrity 的官网活动查询仍被拒绝。当前应比较实际 token 配对及签发身份，
+见[签发与使用关系](docs/campaign-discovery/twitch-integrity-binding.md)。上轮 SDK 域还有
+429；先遵守 Retry-After，再按 CLOUD_OPERATION.md 做一次有界验证。新版遇到相关 429
+会中止，不自动复跑。以下矿机交互登录步骤仅适用于有可用桌面的环境。
 
 请在用户实际运行矿机的 Linux 环境验证这份候选补丁，并根据真实失败修正。
 先读本文、[CAMPAIGN_DISCOVERY.md](CAMPAIGN_DISCOVERY.md) 和
@@ -21,7 +22,7 @@
 - 分支：`codex/campaign-discovery`，不是 `master`。
 - 上游起点：`22d0c6134f9291d1e904012c465504a22bd3f97c`。
 - 候选实现提交：`42f6409a45bebca82bf03e7299a994535dbc4482`。
-- 早期 40 项离线测试已在 Muse 通过；Windows 当前 85 项通过，新增测试需在 Muse 运行。
+- 早期 40 项离线测试已在 Muse 通过；Windows 当前 126 项通过，新增测试需在 Muse 运行。
   Linux 完整发现、观看与领取尚未验证。
 - Windows 上，真实 WEB 登录态配合仓库的 aiohttp、恢复和活动构造代码：
   Dashboard 160 个活动，Inventory 0 个进行中活动，124 个适用的新活动进入矿机对象；

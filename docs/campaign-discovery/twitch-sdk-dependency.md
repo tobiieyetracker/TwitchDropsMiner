@@ -1,5 +1,9 @@
 # Integrity 启动依赖与下一轮观测
 
+后续结果：Muse 的 `b7ea9ce` 已确认 SDK 脚本加载、就绪及两次 token 签发，
+仍被拒的是带完整性头的 dashboard。本文保留为旧观测缺口及源码依赖记录，
+不再将缺少 SDK 当作当前方向。当前下一步见[签发与使用关系](twitch-integrity-binding.md)。
+
 本记录复用 2026-09-30 已下载的 Twitch 前端源码，没有重新调查 query hash，
 也没有据此宣称 Muse 的实际失败原因已经定位。
 

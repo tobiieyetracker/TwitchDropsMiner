@@ -29,8 +29,10 @@ those bundles. The current web transport handles
 replaying the challenged operation with `Client-Integrity`.
 
 The web integrity manager calls `https://gql.twitch.tv/integrity` using the
-same OAuth token, client ID, device ID, session ID and client version as the
-web session. It refreshes at 90% of the returned token lifetime. The site's
+web session's client ID, device ID, session ID and client version. OAuth is
+included once the manager's auth token is initialized; the actual request
+identity must be observed to establish a match. It refreshes at 90% of the returned
+token lifetime. The site's
 own fetch wrapper handles its browser checks. An arbitrary string in the
 `Client-Integrity` header does not provide this session.
 
@@ -91,11 +93,19 @@ It leaves the selected cookie file untouched, observes the website's dashboard,
 and performs one Python control read only after that website request succeeds
 for the expected identity. It uses normal browser settings and retains certificate
 verification. This is a diagnostic import, not persistent authentication in the miner.
-Muse confirmed the imported WEB token matched the website's request and user, but
-the dashboard was challenged without an integrity header. The diagnostic now
-separately observes requests, responses, completion and failure, and distinguishes
-SDK scripts from images. An empty response list did not establish that no request
-was sent. See [the SDK dependency evidence](docs/campaign-discovery/twitch-sdk-dependency.md).
+Muse's `b7ea9ce` report confirmed SDK loading/readiness and two completed integrity
+POSTs returning tokens. A dashboard with Client-Integrity still failed. The earlier
+empty response list was an observation gap, not evidence that no request was sent.
+The probe now passively correlates issued tokens with dashboard headers, compares
+issuance/use identities and records request order independently of parsing order.
+It records and stops on relevant SDK/GQL HTTP 429, including pending navigation,
+without sending a new Python control after that signal or automatically retrying.
+Token values remain in memory and are discarded at cleanup; only match results
+and relative times are reported. Unknown/cancelled body parsing is not reported
+as an absent token. The final SDK snapshot is explicitly timed after network freeze.
+See [the binding evidence and next verification](docs/campaign-discovery/twitch-integrity-binding.md).
+Muse also observed an SDK-domain 429 and an aborted fetch. Their effect on the
+rejection is unproven. This update does not establish a fix or a server-side cause.
 
 ## Recovery and limits
 
@@ -149,9 +159,10 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (85 passed, including cookie
+Run `python -m pytest -q tests` for the offline suite (126 passed, including cookie
 preservation and the standalone diagnostic's identity checks, read-only batch
-extraction, network lifecycle observation and redacted output). Remaining:
+extraction, network lifecycle observation, issuance/use correlation, cancellation,
+429 stop conditions and redacted output). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
 rendering, plus a longer run through natural token expiry. No root cause was
 established for the failed Edge sign-in; browser protections were not changed.
