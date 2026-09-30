@@ -59,4 +59,38 @@ Muse 已安全快进至 `e3ac929`，并报告同组离线测试通过。对真�
 Muse 另报告新的 `diag_forward.py` 完成 14 项本地假上游检查，父任务
 `diag_probe_parent.py` 完成 9 项认证转发／超时清理检查。Codex 已读到实际转发代码，
 并进一步核对父任务对浏览器子进程的清理和整体期限。这些检查均未发 Twitch 请求。
-源文件、报告和两份领取日志保留；尚没有本轮服务器结果。
+源文件、报告和两份领取日志保留。
+
+## `6e0ac50` 单次服务器验证
+
+Muse 已执行一次修正后的只读验证，报告保存于云主机
+`docs/campaign-discovery/probe-reports/browser-auth-6e0ac50-20260930-2316.json`。
+Codex 直接读取了 Muse 的回报，无需用户转发。结果为退出码 1，
+`state=failed`、`phase=website_dashboard`。
+
+- 本地及 Muse 同组测试均为 **114 passed**。
+- 真实 Jar 中 **21/21** 个 Cookie 导入；浏览器回读
+  `browser_auth_matches=true`、`browser_device_matches=true`。
+- WEB token 校验 HTTP 200，`web_token_valid=true`，代理认证配置为 true。
+- 约 9.9 秒时 `k.twitchcdn.net` 的 SDK document 返回 HTTP 429，没有可解析的
+  Retry-After。探针按既有规则停止；dashboard 与 integrity 响应数组均为空，
+  未执行 Python 对照、观看或领取。不能把空数组进一步解释为整个请求从未发出。
+- Muse 报告父任务新增的进程清理／期限测试 19/19 通过，实际退出后无残留进程且
+  relay 端口已关闭；Cookie 和两份 journal 的 bytes 与运行前一致。
+
+随后 Muse 贴出的报告含 `integrity_network.requests=0`、
+`error=relevant_rate_limit`、`network_frozen_ms=9914.393`；SDK 主脚本和
+73 个 `assets.twitch.tv` 脚本均已完成下载。GQL 请求总体已发生，不能根据
+`dashboard_responses=[]` 声称 dashboard 请求必定从未发出。父任务清理三项
+（probe 进程树结束、relay 结束、端口关闭）均另行确认 true。
+聊天转录的 GQL fetch 汇总出现重复 `outstanding` 键，因此没有把它重新拼成
+“原始 JSON”入库；完整原件以 Muse 云主机保存的文件为准。
+
+**本轮验证了 Cookie 导入修正，没有验证 campaign／integrity 接受或领取成功。**
+同样的服务器请求不自动复跑。429 的原因仍未确定，不能宣称是出口 IP、
+自动化检测或证书问题。
+
+另一次只读源码核对发现，已有 `21956` 网页包只包含 `loadKPSDK()` 等封装，
+没有 SDK `p.js` 本体的 429／iframe 处理实现。封装的通用异常退避不足以证明
+此 429 是可忽略的正常挑战；[RFC 6585 §4](https://www.rfc-editor.org/rfc/rfc6585#section-4)
+也不规定服务器按何种身份计数，且 Retry-After 可选。本轮没有放宽停止规则。
