@@ -1,12 +1,13 @@
 """Offline boundary tests: real journal/Python reads, simulated website transport."""
 import asyncio
 import json
+import sys
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from http.cookies import SimpleCookie
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
@@ -57,7 +58,10 @@ class Website:
         self.capture = None
 
     async def launch(self, **kwargs):
-        assert kwargs == {"headless": False, "channel": "chrome"}
+        self.launch_options = deepcopy(kwargs)
+        assert {key: value for key, value in kwargs.items() if key != "proxy"} == {
+            "headless": False, "channel": "chrome",
+        }
         return self
 
     async def new_context(self, **kwargs):
@@ -152,7 +156,8 @@ class Website:
         self.closed = True
 
 
-def scenario(monkeypatch, tmp_path, *, behavior="success", previous=False, claimed=False):
+def scenario(monkeypatch, tmp_path, *, behavior="success", previous=False, claimed=False,
+             browser_proxy=None, python_proxy=None):
     async def run():
         real_sleep = asyncio.sleep
 
@@ -210,7 +215,8 @@ def scenario(monkeypatch, tmp_path, *, behavior="success", previous=False, claim
             return await original_read(client, label, **kwargs)
 
         monkeypatch.setattr(native, "read_inventory", read)
-        code, report = await native.check(cookie_file, "Test campaign", state_dir=state_dir)
+        code, report = await native.check(cookie_file, "Test campaign", proxy=browser_proxy,
+                                          python_proxy=python_proxy, state_dir=state_dir)
         assert cookie_file.read_bytes() == cookie_bytes
         assert all((state_dir / name).read_bytes() == content for name, content in originals.items())
         assert not network.claims and not network.sends, "Python must remain Inventory-only"
@@ -365,3 +371,47 @@ def test_guard_timeout_cancels_pending_work():
         await capture.close()
 
     asyncio.run(run())
+
+
+def test_browser_relay_and_python_upstream_are_separate_and_redacted(monkeypatch, tmp_path):
+    browser_proxy = "http://fixture-browser-user:fixture-browser-password@127.0.0.1:32123"
+    python_proxy = "http://fixture-python-user:fixture-python-password@platform.proxy.invalid:3128"
+    code, report, site, network, record = scenario(
+        monkeypatch, tmp_path, browser_proxy=browser_proxy, python_proxy=python_proxy,
+    )
+    assert code == 0 and report["state"] == "claim_confirmed"
+    assert network.calls and all(call[3]["proxy"] == python_proxy for call in network.calls)
+    assert site.launch_options["proxy"] == {
+        "server": "http://127.0.0.1:32123",
+        "username": "fixture-browser-user", "password": "fixture-browser-password",
+    }
+    assert report["separate_python_proxy"] is True and report["proxy_auth"] is True
+    output = json.dumps(report)
+    assert all(value not in output for value in (
+        browser_proxy, python_proxy, "fixture-browser-user", "fixture-browser-password",
+        "fixture-python-user", "fixture-python-password", "platform.proxy.invalid", "32123",
+    ))
+
+
+def test_missing_python_proxy_environment_stops_before_network(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sys, "argv", [
+        "check_native_claim.py", "--cookie-file", str(tmp_path / "not-read.jar"),
+        "--campaign-name", "Test campaign", "--proxy-env", "NATIVE_TEST_BROWSER_PROXY",
+        "--python-proxy-env", "NATIVE_TEST_PYTHON_PROXY",
+    ])
+    monkeypatch.setenv("NATIVE_TEST_BROWSER_PROXY", "http://fixture-proxy-secret@127.0.0.1:32123")
+    monkeypatch.delenv("NATIVE_TEST_PYTHON_PROXY", raising=False)
+    check, sessions = AsyncMock(), Mock()
+    monkeypatch.setattr(native, "check", check)
+    monkeypatch.setattr(aiohttp, "ClientSession", sessions)
+    logging_level = native.logging.root.manager.disable
+    try:
+        code = native.main()
+    finally:
+        native.logging.disable(logging_level)
+    assert code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "state": "failed", "error": "python_proxy_environment_missing",
+    }
+    check.assert_not_called()
+    sessions.assert_not_called()

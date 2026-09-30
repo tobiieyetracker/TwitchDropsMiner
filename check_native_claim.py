@@ -367,15 +367,20 @@ async def run_browser(client, journal, imported, target, channel, proxy, seconds
     return capture
 
 
-async def check(cookie_file, campaign_name, proxy=None, state_dir=DEFAULT_STATE, channel="chrome", seconds=60):
+async def check(cookie_file, campaign_name, proxy=None, state_dir=DEFAULT_STATE, channel="chrome", seconds=60,
+                *, python_proxy=None):
     report = {"state": "failed", "mode": "native_inventory_claim", "requests": [],
               "inventory_checks": [], "current_checks": [], "watch_sends": 0,
               "claim": {"attempted": False, "previous_attempt": False, "confirmed": False},
               "limits": {"total_seconds": MAX_SECONDS, "python_requests": MAX_PYTHON_REQUESTS,
                          "browser_navigations": 1, "native_clicks": 1, "claim_wire_requests": 2}}
+    report["separate_python_proxy"] = python_proxy is not None
     clock = SimpleNamespace(time=time.monotonic, sleep=asyncio.sleep)
     start = clock.time()
-    client = InventoryClient(report, proxy, clock, start + MAX_SECONDS)
+    # Muse's relay exists because Chromium cannot reach the same platform
+    # upstream directly. Python already can; it need not depend on that relay.
+    client = InventoryClient(report, python_proxy if python_proxy is not None else proxy,
+                             clock, start + MAX_SECONDS)
     try:
         if not 10 <= seconds <= 90 or not campaign_name.strip():
             raise WatchCheckError("native_parameters_invalid")
@@ -454,6 +459,7 @@ def main():
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--channel", choices=("chrome", "msedge", "chromium"), default="chrome")
     parser.add_argument("--proxy-env")
+    parser.add_argument("--python-proxy-env", help="Optional original upstream proxy for Python reads; browser keeps --proxy-env")
     parser.add_argument("--seconds", type=int, default=60)
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
@@ -461,10 +467,15 @@ def main():
     if args.proxy_env and not proxy:
         print(json.dumps({"state": "failed", "error": "proxy_environment_missing"}))
         return 1
+    python_proxy = os.environ.get(args.python_proxy_env) if args.python_proxy_env else None
+    if args.python_proxy_env and not python_proxy:
+        print(json.dumps({"state": "failed", "error": "python_proxy_environment_missing"}))
+        return 1
     import truststore
     truststore.inject_into_ssl()
     code, report = asyncio.run(check(args.cookie_file, args.campaign_name, proxy,
-                                    args.state_dir, args.channel, args.seconds))
+                                    args.state_dir, args.channel, args.seconds,
+                                    python_proxy=python_proxy))
     print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
     return code
 

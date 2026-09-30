@@ -3,6 +3,19 @@
 Status: candidate, not yet accepted by Twitch on Muse. This is a bounded test of
 one already-earned reward, not unattended claiming or a deployed miner.
 
+First Muse run, `75e9ec5`: all 239 focused offline tests passed. The live run
+stopped during Python identity validation with `ClientConnectionError`, before
+browser launch, Inventory, clicking or a claim request. Child exit was 1;
+the wrapper reported exit 0. The parent cleaned its relay/processes, old cookies
+and journals were unchanged, and no native journal was created. The archived
+report is `native-claim-75e9ec5-20260930-2346.json` on Muse. This is not evidence
+of Twitch rejecting the native claim path.
+
+The runner now permits separate transport proxy parameters: Python reads can
+use the platform upstream already known to work, while Chromium uses the relay
+to that same upstream. This removes an unnecessary Python relay dependency;
+it does not establish why the first connection failed or change the egress.
+
 The previous Python attempts had no accepted integrity context. The latest
 source-derived hash returned an explicit integrity challenge. Changing a hash
 again does not address that result. The official inventory page has its own
@@ -71,12 +84,16 @@ the existing environment, never write them into this command):
 DISPLAY=:99 DIAG_PROBE_TIMEOUT=200 DIAG_PARENT_BUDGET=240 \
   python3 diag_probe_parent.py <existing-venv-python> check_native_claim.py \
   --cookie-file cookies.jar --campaign-name 'Rust Isles AR' \
-  --channel chrome --proxy-env BROWSER_PROXY --seconds 60
+  --channel chrome --proxy-env BROWSER_PROXY --python-proxy-env HTTPS_PROXY \
+  --seconds 60
 ```
 
 The runner has a 180-second internal total budget. The parent must retain its
 finite deadline and process-group/relay cleanup. No simultaneous Twitch probe,
 miner or extra inventory-page session should be started for this run.
+The parent retains the original `HTTPS_PROXY` environment for the child and
+adds `BROWSER_PROXY` for Chromium. If the selected variable is missing, the
+script fails before network access. It never prints either proxy value.
 
 Save the complete redacted JSON under `docs/campaign-discovery/probe-reports/`.
 Report the exact commit, exit code, `state`, `phase`, error codes,
