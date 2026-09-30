@@ -45,6 +45,7 @@ class Settings:
     log: bool
     tray: bool
     dump: bool
+    campaign_web_cookie_file: str | None
     # args properties
     debug_ws: int
     debug_gql: int

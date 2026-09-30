@@ -73,6 +73,7 @@ if __name__ == "__main__":
         check_campaigns: bool
         smartbox_auth: bool
         cookie_file: str | None
+        campaign_web_cookie_file: str | None
         campaign_game: list[str]
         campaign_channel: list[str]
 
@@ -143,6 +144,13 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--campaign-web-cookie-file", default=None, metavar="PATH",
+        help=(
+            "For --smartbox-auth, read AvailableDrops with a separately validated WEB "
+            "cookie belonging to the same account; never writes that cookie file."
+        ),
+    )
+    parser.add_argument(
         "--campaign-game", action="append", default=[], metavar="GAME",
         help=(
             "Game name to scan through live-channel AvailableDrops when the dashboard "
@@ -168,6 +176,10 @@ if __name__ == "__main__":
         parser.error("--cookie-file can only be used with --check-campaigns")
     if args.cookie_file and args.browser_auth:
         parser.error("--cookie-file cannot be combined with --browser-auth")
+    if args.campaign_web_cookie_file and not args.smartbox_auth:
+        parser.error("--campaign-web-cookie-file requires --smartbox-auth")
+    if args.campaign_web_cookie_file and args.browser_auth:
+        parser.error("--campaign-web-cookie-file cannot be combined with --browser-auth")
     # load settings
     try:
         settings = Settings(args)

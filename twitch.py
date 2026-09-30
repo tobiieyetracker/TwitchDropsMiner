@@ -25,6 +25,7 @@ from campaign_discovery import (
     merge_inventory_campaign,
     normalize_available_campaign,
 )
+from campaign_web_source import WebCampaignSource, WebCampaignSourceError
 from websocket import WebsocketPool
 from inventory import DropsCampaign
 from gql_recovery import (
@@ -525,6 +526,7 @@ class Twitch:
         self._state_change = asyncio.Event()
         self.wanted_games: list[Game] = []
         self.inventory: list[DropsCampaign] = []
+        self._in_progress_campaign_ids: set[str] = set()
         self._drops: dict[str, TimedDrop] = {}
         self._campaigns: dict[str, DropsCampaign] = {}
         self._mnt_triggers: deque[datetime] = deque()
@@ -744,6 +746,27 @@ class Twitch:
         if getattr(self.settings, "check_campaigns", False):
             await self.fetch_inventory()
             self.print(f"Campaign discovery check completed: {len(self.inventory)} campaigns.")
+            in_progress_ids = getattr(self, "_in_progress_campaign_ids", set())
+            new_campaigns = [
+                campaign for campaign in self.inventory if campaign.id not in in_progress_ids
+            ]
+            self.print(f"New campaigns beyond Inventory: {len(new_campaigns)}.")
+            for campaign in new_campaigns:
+                link_state = (
+                    "connected" if campaign.linked is True
+                    else "not connected" if campaign.linked is False
+                    else "unknown"
+                )
+                drops = "; ".join(
+                    f"{drop.name} [{drop.id}] ({drop.required_minutes} minutes)"
+                    for drop in campaign.drops
+                ) or "none"
+                sources = ", ".join(campaign.discovery_channel_logins) or "unknown"
+                self.print(
+                    f"Discovered campaign: {campaign.name} [{campaign.id}], "
+                    f"game {campaign.game.name}, account link {link_state}, "
+                    f"source channels {sources}, drops: {drops}."
+                )
             return
         await self.websocket.start()
         # NOTE: watch task is explicitly restarted on each new run
@@ -1608,7 +1631,11 @@ class Twitch:
         return logins
 
     async def _discover_campaigns_from_channels(
-        self, game_names: list[str], channel_logins: list[str] | None = None
+        self,
+        game_names: list[str],
+        channel_logins: list[str] | None = None,
+        *,
+        availability_client: Any | None = None,
     ) -> tuple[dict[str, JsonType], int, int]:
         """Discover partial candidates via configured games and exact channels."""
         channels_by_id: dict[int, Channel] = {}
@@ -1659,7 +1686,8 @@ class Twitch:
                 {"channelID": str(channel.id)}
             )
             try:
-                response = await self.gql_request(operation)
+                reader = availability_client or self
+                response = await reader.gql_request(operation)
             except CampaignAvailabilityUnknown:
                 # One channel returning an unknown/null value must not erase
                 # candidates already read from other channels. Integrity or
@@ -1754,6 +1782,7 @@ class Twitch:
         }
         inventory_data: dict[str, JsonType] = {c["id"]: c for c in ongoing_campaigns}
         ongoing_ids = set(inventory_data)
+        self._in_progress_campaign_ids = ongoing_ids
         available_list: list[JsonType] = []
         channel_candidates: dict[str, JsonType] = {}
         attempted_channels = 0
@@ -1762,20 +1791,59 @@ class Twitch:
         discovery_channels = self._campaign_discovery_channels()
         smartbox_client = self._client_type.CLIENT_ID == ClientType.SMARTBOX.CLIENT_ID
         dashboard_available = not smartbox_client
+        availability_identity = "SMARTBOX" if smartbox_client else "WEB session"
 
         if smartbox_client:
             # Twitch for TV sessions do not expose ViewerDropsDashboard or
-            # DropCampaignDetails. Use the upstream-proven channel-first path.
+            # DropCampaignDetails. A matching WEB token can read the public
+            # AvailableDrops field without starting a browser session; keep the
+            # SMARTBOX identity authoritative for inventory/watch/claim.
             if discovery_games or discovery_channels:
+                web_campaign_source: WebCampaignSource | None = None
+                web_cookie_file = getattr(self.settings, "campaign_web_cookie_file", None)
+                if web_cookie_file:
+                    candidate_source = WebCampaignSource(
+                        web_cookie_file,
+                        proxy=str(self.settings.proxy) if self.settings.proxy else None,
+                        gql_limiter=self._qgl_limiter,
+                    )
+                    try:
+                        await candidate_source.open(
+                            expected_user_id=self._auth_state.user_id
+                        )
+                    except WebCampaignSourceError as exc:
+                        await candidate_source.close()
+                        if exc.fatal:
+                            raise CampaignAccessError(
+                                f"The WEB campaign source stopped ({exc.code})."
+                            ) from None
+                        self.print(
+                            f"The saved WEB campaign source is unavailable ({exc.code}); "
+                            "using the SMARTBOX identity for the partial channel scan."
+                        )
+                    else:
+                        web_campaign_source = candidate_source
+                        availability_identity = "same-account WEB cookie"
+                        self.print(
+                            "Using the verified same-account WEB cookie only for read-only "
+                            "AvailableDrops discovery; SMARTBOX remains the inventory, "
+                            "watch and claim identity."
+                        )
                 self.print(
                     "SMARTBOX campaign discovery scans configured games and explicit "
                     "channels only; the result is partial and is not a full campaign list."
                 )
-                channel_candidates, attempted_channels, unavailable_channels = (
-                    await self._discover_campaigns_from_channels(
-                        discovery_games, discovery_channels
+                try:
+                    channel_candidates, attempted_channels, unavailable_channels = (
+                        await self._discover_campaigns_from_channels(
+                            discovery_games,
+                            discovery_channels,
+                            availability_client=web_campaign_source,
+                        )
                     )
-                )
+                finally:
+                    if web_campaign_source is not None:
+                        await web_campaign_source.close()
             else:
                 self.print(
                     "SMARTBOX does not provide the campaign dashboard. Set --campaign-game, "
@@ -1922,7 +1990,8 @@ class Twitch:
                     f"({attempted_channels} channel queries sent across "
                     f"{len(discovery_channels)} explicit channels and "
                     f"{len(discovery_games)} configured games; "
-                    f"{unavailable_channels} availability results unknown)"
+                    f"{unavailable_channels} availability results unknown; "
+                    f"AvailableDrops identity: {availability_identity})"
                 )
             self.print(
                 f"Campaign sources: {len(ongoing_ids)} in progress, {campaign_source}, "

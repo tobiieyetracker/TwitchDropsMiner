@@ -5,10 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import twitch as twitch_module
 
 from constants import ClientInfo, ClientType, GQL_QUERIES
 from gql_recovery import CampaignAccessError
 from twitch import Twitch, _AuthState
+from utils import RateLimiter
 from web_session import WebCredentials
 from campaign_discovery import normalize_available_campaign
 
@@ -87,7 +89,12 @@ def test_campaign_discovery_falls_back_to_configured_channel_scan(smartbox, caps
     client.gql_request = AsyncMock(side_effect=send)
     asyncio.run(client.fetch_inventory())
 
-    client._discover_campaigns_from_channels.assert_awaited_once_with(["Rust"], [])
+    if smartbox:
+        client._discover_campaigns_from_channels.assert_awaited_once_with(
+            ["Rust"], [], availability_client=None
+        )
+    else:
+        client._discover_campaigns_from_channels.assert_awaited_once_with(["Rust"], [])
     assert [campaign.id for campaign in client.inventory] == ["channel-campaign"]
     assert client.inventory[0].linked is None
     assert client.inventory[0].discovery_channel_logins == ["rainbow6"]
@@ -96,6 +103,58 @@ def test_campaign_discovery_falls_back_to_configured_channel_scan(smartbox, caps
         assert operations == ["Inventory"]
     else:
         assert operations == ["Inventory", "ViewerDropsDashboard"]
+
+
+def test_smartbox_uses_verified_web_cookie_only_for_available_drops(monkeypatch):
+    client = bare_client()
+    client.settings = SimpleNamespace(
+        dump=False, enable_badges_emotes=False, check_campaigns=True,
+        priority=["Rust"], campaign_game=[], campaign_channel=["rainbow6"],
+        campaign_web_cookie_file="cookies.jar", proxy=None,
+    )
+    client._drops, client._campaigns, client.inventory = {}, {}, []
+    client._mnt_triggers, client._mnt_task = deque(), None
+    client.get_auth = AsyncMock(return_value=SimpleNamespace(user_id=42))
+    client._auth_state = SimpleNamespace(user_id=42)
+    client._client_type = ClientType.SMARTBOX
+    client._qgl_limiter = RateLimiter(capacity=5, window=1)
+    client.print = Mock()
+    client.gql_request = AsyncMock(return_value={"data": {"currentUser": {"inventory": {
+        "dropCampaignsInProgress": [], "gameEventDrops": [],
+    }}}})
+    source_constructed = {}
+
+    class FakeWebCampaignSource:
+        def __init__(self, cookie_file, *, proxy, gql_limiter):
+            source_constructed["instance"] = self
+            source_constructed.update(
+                cookie_file=cookie_file, proxy=proxy, gql_limiter=gql_limiter
+            )
+
+        async def open(self, *, expected_user_id):
+            source_constructed["expected_user_id"] = expected_user_id
+
+        async def close(self):
+            source_constructed["closed"] = True
+
+    monkeypatch.setattr(twitch_module, "WebCampaignSource", FakeWebCampaignSource)
+    client._discover_campaigns_from_channels = AsyncMock(
+        return_value=({"channel-campaign": channel_campaign_candidate()}, 1, 0)
+    )
+    client.gui.print = Mock()
+
+    asyncio.run(client.fetch_inventory())
+
+    assert source_constructed["cookie_file"] == "cookies.jar"
+    assert source_constructed["expected_user_id"] == 42
+    assert source_constructed["closed"] is True
+    client._discover_campaigns_from_channels.assert_awaited_once_with(
+        ["Rust"], ["rainbow6"], availability_client=source_constructed["instance"]
+    )
+    assert [call.args[0]["operationName"] for call in client.gql_request.await_args_list] == [
+        "Inventory",
+    ]
+    assert any("same-account WEB cookie" in str(call.args) for call in client.print.call_args_list)
 
 
 def test_dashboard_failure_without_configured_games_remains_an_error():
@@ -212,12 +271,29 @@ def test_check_mode_cannot_start_watching_or_claiming():
     client.get_auth = AsyncMock()
     client.fetch_inventory = AsyncMock()
     client.inventory = [object(), object()]
+    client._in_progress_campaign_ids = {"in-progress"}
+    client.inventory = [
+        SimpleNamespace(
+            id="in-progress", name="Existing", game=SimpleNamespace(name="Game"),
+            linked=True, drops=[], discovery_channel_logins=[],
+        ),
+        SimpleNamespace(
+            id="new-campaign", name="New", game=SimpleNamespace(name="Game"),
+            linked=None,
+            drops=[SimpleNamespace(name="Drop", id="drop-id", required_minutes=0)],
+            discovery_channel_logins=["rainbow6"],
+        ),
+    ]
+    client.print = Mock()
     client.websocket = SimpleNamespace(start=AsyncMock())
     client._watch_loop = AsyncMock()
     asyncio.run(client._run())
     client.fetch_inventory.assert_awaited_once()
     client.websocket.start.assert_not_awaited()
     client._watch_loop.assert_not_awaited()
+    output = "\n".join(str(call.args[0]) for call in client.print.call_args_list)
+    assert "New campaigns beyond Inventory: 1." in output
+    assert "New [new-campaign]" in output and "drop-id" in output
 
 
 def test_transport_supplies_matching_browser_headers():
