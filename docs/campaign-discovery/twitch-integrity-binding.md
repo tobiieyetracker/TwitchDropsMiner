@@ -169,6 +169,12 @@ operation/hash，不附带 Client-Integrity。
 WEB Cookie 与旧尝试记录保留；先让 Muse 只读核对旧 TV 会话是否仍保留，
 本轮未新增登录、领取或 Twitch 查询。
 
+Muse 随后只读核对回执：没有 SMARTBOX 签发且 Client-Id 匹配的 ClaimDrop
+实验；已保存的领取请求属于 WEB，原生浏览器尝试均未到领取请求。
+旧 `cookies.jar.bak` 仍存在，2026-09-30 的既有 validate 记录证明它当时属于
+同账号 SMARTBOX 会话；未记录 expires_in，当前有效性未知。此次未验证 token，
+也未动现用 WEB Cookie 或旧 journal。这是可继续验证的前置资料，不是领取通过。
+
 其他候选的边界：PR #1178 已把 WEB ClaimDrop 接到浏览器传输，但仅有 Windows
 作者报告，Linux、认证代理和自然刷新未验收。rangermix 的已合并
 [PR #124](https://github.com/rangermix/TwitchDropsMiner/pull/124) 有一次桌面交接后
