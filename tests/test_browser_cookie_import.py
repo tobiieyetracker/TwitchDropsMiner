@@ -174,6 +174,78 @@ def test_identical_values_in_different_scopes_preserve_original_scopes(tmp_path)
     assert {item["domain"] for item in snapshot.cookies} == {"www.twitch.tv", ".twitch.tv"}
 
 
+def test_json_preserves_different_session_values_in_root_and_mobile_scopes(tmp_path):
+    path = save_json(tmp_path, [
+        auth(), record("unique_id", DEVICE, "twitch.tv"),
+        record("server_session_id", "root-session", "twitch.tv"),
+        record("server_session_id", "mobile-session", "m.twitch.tv"),
+    ])
+    before = path.read_bytes()
+    snapshot = load_browser_cookies(path, now=NOW)
+    sessions = [item for item in snapshot.cookies if item["name"] == "server_session_id"]
+    assert {(item["domain"], item["path"], item["value"]) for item in sessions} == {
+        (".twitch.tv", "/", "root-session"), (".m.twitch.tv", "/", "mobile-session"),
+    }
+    assert snapshot.auth_token == TOKEN and snapshot.unique_id == DEVICE
+    assert snapshot.summary["deduplicated_count"] == 0
+    assert path.read_bytes() == before
+
+
+def test_json_preserves_normal_same_name_cookie_path_overrides(tmp_path):
+    path = save_json(tmp_path, [
+        auth(), record("preference", "root-choice", host_only=True),
+        record("preference", "drops-choice", path="/drops", host_only=True),
+    ])
+    snapshot = load_browser_cookies(path, now=NOW)
+    assert {(item["path"], item["value"]) for item in snapshot.cookies if item["name"] == "preference"} == {
+        ("/", "root-choice"), ("/drops", "drops-choice"),
+    }
+
+
+@pytest.mark.parametrize("second", [
+    record("unique_id", "different-device", host_only=True),
+    record("unique_id", "different-device", path="/drops", host_only=True),
+])
+def test_conflicting_device_cookies_applicable_to_www_are_rejected(tmp_path, second):
+    path = save_json(tmp_path, [auth(), record("unique_id", DEVICE, "twitch.tv"), second])
+    with pytest.raises(BrowserCookieError, match="^cookie_identity_ambiguous$"):
+        load_browser_cookies(path, now=NOW)
+
+
+def test_mobile_identity_cookies_do_not_change_the_www_identity(tmp_path):
+    path = save_json(tmp_path, [
+        auth(), record("unique_id", DEVICE, "twitch.tv"),
+        record("auth-token", "different-mobile-token", "m.twitch.tv"),
+        record("unique_id", "different-mobile-device", "m.twitch.tv"),
+    ])
+    snapshot = load_browser_cookies(path, now=NOW)
+    assert snapshot.auth_token == TOKEN and snapshot.unique_id == DEVICE
+    assert len(snapshot.cookies) == 4
+    assert {(item["name"], item["value"]) for item in snapshot.cookies if item["domain"] == ".m.twitch.tv"} == {
+        ("auth-token", "different-mobile-token"), ("unique_id", "different-mobile-device"),
+    }
+
+
+def test_exact_json_destination_collision_with_different_values_is_rejected(tmp_path):
+    # The buckets normalize to the same browser domain, so this would otherwise
+    # overwrite one ordinary cookie according to dictionary iteration order.
+    path = save_json(tmp_path, [
+        auth(), record("server_session_id", "first-session", "twitch.tv"),
+        record("server_session_id", "second-session", ".twitch.tv"),
+    ])
+    with pytest.raises(BrowserCookieError, match="^cookie_identity_ambiguous$"):
+        load_browser_cookies(path, now=NOW)
+
+
+def test_legacy_scope_narrowing_cannot_overwrite_different_session_values(tmp_path):
+    path = save_legacy(tmp_path, [
+        auth(), record("server_session_id", "root-session", "twitch.tv"),
+        record("server_session_id", "www-session", "www.twitch.tv"),
+    ])
+    with pytest.raises(BrowserCookieError, match="^cookie_identity_ambiguous$"):
+        load_browser_cookies(path, now=NOW)
+
+
 def test_legacy_scopes_collapsing_to_same_cookie_are_deduplicated(tmp_path):
     path = save_legacy(tmp_path, [record("auth-token", TOKEN, "twitch.tv"),
                                   record("auth-token", TOKEN, "www.twitch.tv")])

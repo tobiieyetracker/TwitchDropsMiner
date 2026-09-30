@@ -150,20 +150,6 @@ def _flag(item: dict[str, Any], key: str) -> bool:
     return bool(value)
 
 
-def _scope_overlap(first: dict[str, Any], second: dict[str, Any]) -> bool:
-    left, right = first["domain"], second["domain"]
-    left_host, right_host = left.lstrip("."), right.lstrip(".")
-    domains_overlap = (
-        left_host == right_host
-        or (left.startswith(".") and _domain_matches(right_host, left_host))
-        or (right.startswith(".") and _domain_matches(left_host, right_host))
-    )
-    return domains_overlap and (
-        _path_matches(first["path"], second["path"])
-        or _path_matches(second["path"], first["path"])
-    )
-
-
 def _website_value(cookies: list[dict[str, Any]], name: str) -> str | None:
     values = {
         item["value"] for item in cookies if item["name"] == name
@@ -258,15 +244,20 @@ def _load_browser_cookies(path: Path | str, *, now: float | None = None) -> Brow
         if expires is not None:
             cookie["expires"] = expires
         for previous in cookies:
-            if previous["name"] != name or not _scope_overlap(previous, cookie):
+            # Browsers preserve same-name cookies with distinct domain/path
+            # scopes, including ordinary subdomain and path overrides. Only
+            # an exact destination collision would make import order matter.
+            # Legacy scope narrowing can introduce such a collision.
+            if (previous["name"], previous["domain"], previous["path"]) != (
+                name, cookie["domain"], cookie["path"],
+            ):
                 continue
             if previous["value"] != cookie["value"]:
                 raise BrowserCookieError("cookie_identity_ambiguous")
-            if (previous["domain"], previous["path"]) == (cookie["domain"], cookie["path"]):
-                if previous != cookie:
-                    raise BrowserCookieError("cookie_attributes_ambiguous")
-                summary["deduplicated_count"] += 1
-                break
+            if previous != cookie:
+                raise BrowserCookieError("cookie_attributes_ambiguous")
+            summary["deduplicated_count"] += 1
+            break
         else:
             cookies.append(cookie)
     auth_token = _website_value(cookies, "auth-token")
