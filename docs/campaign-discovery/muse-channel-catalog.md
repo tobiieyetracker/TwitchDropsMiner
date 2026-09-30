@@ -56,7 +56,25 @@ Twitch integrity，也不能称本次活动列表为空。
 `passed`、把未知掉宝列表当空、忽略坏库存条目后继续计算差集。取回后的版本已
 修正这些缺陷；旧报告不修改。39 项离线测试通过，包括实际 HTTP 调用边界的
 TLS 上下文、请求顺序/预算、异常停止、身份匹配、未知值、敏感信息过滤与清理。
-这些测试使用模拟服务器，修正后的真实服务结果另行记录。
+这些测试使用模拟服务器；相关频道/观看测试共 94 项通过。
+
+Muse 随后在保留原分支的 `codex/catalog-reviewed-2958218` 上执行了一次修正版本
+`2958218`。报告为 `probe-reports/channel-catalog-2958218-20261001-0107.json`：
+
+- 退出码 1，`state=failed`、`phase=available_drops`、`error=catalog_null`。
+- 三次请求均 HTTP 200：身份 GET、GetStreamInfo、AvailableDrops。未记录 challenge
+  或 429；本轮没有 `request_failure`。
+- 活动解析状态为 `null`，数量及候选保持未知。解析器将 data/channel/活动字段的
+  null 映射到此状态，单凭此字段不能补写原响应具体哪一层为 null。
+- hJune 的当前游戏为 `I'm Only Sleeping`，不是此前的 Rust。这不能单独解释
+  null 的原因，也不能证明 Rust Isles AR 已不存在。
+- Inventory 按停止条件未调用；账号库存对照与新增活动差集未知。
+- Cookie、旧 journal、原报告和 Muse 的原 `e97c0e7` 分支保留；无残留进程，
+  未运行浏览器、观看、领取或定时任务。
+
+以上现场结果来自直接读取 Muse 对话回执；完整 JSON 保存在 Muse，尚未在本机
+独立读取。本轮证明修正后的 Python 连接可以完成三次请求，不能仅由前后结果
+断言上一轮连接错误的唯一根因。它也没有验证成功的频道候选列表；不自动复跑。
 
 完整活动发现仍以 [dashboard 验证记录](muse-campaign-coverage.md) 为准；
 领取仍以 [原生领取验证记录](muse-native-inventory-claim.md) 为准。当前没有
