@@ -10,6 +10,10 @@ For the next Linux run, follow [the Muse validation handoff](LINUX_VALIDATION.md
 The intended delivery is now unattended discovery, progress and claims on the
 user's Xvfb-only Linux host; see [cloud operation requirements](CLOUD_OPERATION.md).
 That is not implemented or verified end to end by this candidate.
+The subsequent [pure Python integrity test](PYTHON_AUTH_VALIDATION.md) received
+tokens from a direct HTTP integrity request, but those tokens were rejected by
+the dashboard. The same Python transport succeeded with the normal web page's
+token. Browser-free issuance and ongoing refresh remain unverified.
 The later [SMARTBOX / ANDROID_APP comparison](docs/campaign-discovery/twitch-android-campaign-validation.md)
 still returned null with SMARTBOX-issued OAuth, including with fresh integrity.
 WEB-issued OAuth plus matching web identity and integrity returned campaigns with
