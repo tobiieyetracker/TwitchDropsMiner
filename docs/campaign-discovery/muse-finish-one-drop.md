@@ -4,6 +4,10 @@
 本入口只完成下一项有界验证：延续已在 Inventory 中出现的 Rust Isles AR，尝试领取一次，
 再读取同账号服务器库存确认。它不是常驻服务，也不代表全部 campaign 发现已修复。
 
+**当前进展：Muse 已完成下文的 `296e797 --reconcile-only` 核对，目标仍是 60/60、
+`isClaimed:false`。本轮不再重复该命令。** 下一步执行
+[网页领取查询的单次候选验证](muse-web-claim-candidate.md)，保留这里的原尝试记录。
+
 ## 已获得的证据
 
 Muse 报告在 `547f783` 上原样执行十分钟测试，退出码 0、`progress_observed`：
@@ -33,7 +37,7 @@ ClaimDrop 请求 HTTP 200，程序以 `error:gql_challenge`、`phase:claim` 退�
 challenge、token 和响应体均不输出。实际请求记录只增加 `integrity_header_present`
 布尔值。它们服务于以后的观测，无法补回旧响应，也不是重新提交领取的理由。
 
-### 当前下一步：只读核对一次
+### 已完成：296e797 只读核对
 
 保留原状态目录，更新到本次交接指定提交后执行一次：
 

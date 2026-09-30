@@ -40,6 +40,8 @@ DEFAULT_STATE = Path.home() / ".local" / "state" / "twitchdropsminer" / "finish-
 
 
 class FinishClient(WatchClient):
+    claim_query = GQL_QUERIES["ClaimDrop"]
+
     def __init__(self, report, proxy, clock, deadline, *, reconcile_only=False):
         super().__init__(report, proxy)
         self.clock, self.deadline = clock, deadline
@@ -77,10 +79,13 @@ class FinishClient(WatchClient):
         )
         if self._claim_used or self._claim_authorization is None or operation != expected:
             raise WatchCheckError("claim_not_authorized")
+        wire_operation = self.claim_query.with_variables(
+            {"input": {"dropInstanceID": self._claim_authorization}}
+        )
         # Consume before the first await. Neither transport nor _claim retries.
         self._claim_used = True
         self._claim_authorization = None
-        body, _ = await Twitch._gql_request_once(self, operation)
+        body, _ = await Twitch._gql_request_once(self, wire_operation)
         self.report["claim"]["response_challenge"] = summarize_challenge(body)
         self.report["requests"][-1]["response_challenge"] = self.report["claim"]["response_challenge"]
         check_envelope(body)

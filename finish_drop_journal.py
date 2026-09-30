@@ -132,9 +132,12 @@ class FinishJournal:
             raise WatchCheckError("finish_journal_not_locked")
 
     def read(self) -> dict | None:
+        return self._read_at(self.journal_path)
+
+    def _read_at(self, path: Path) -> dict | None:
         self._require_lock()
         try:
-            with self.journal_path.open("rb") as source:
+            with path.open("rb") as source:
                 content = source.read(_MAX_BYTES + 1)
         except FileNotFoundError:
             return None
