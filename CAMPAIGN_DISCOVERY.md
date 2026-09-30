@@ -179,8 +179,19 @@ Run `python -m pytest -q tests` for the offline suite (155 passed, including coo
 preservation and the standalone diagnostic's identity checks, read-only batch
 extraction, network lifecycle observation, issuance/use correlation, cancellation,
 429 stop conditions, redacted output, AvailableDrops null/empty handling, and the
-Login-button fallback from an unavailable device code to Chrome). Remaining:
-complete a supported standalone browser sign-in and verify the actual Tk inventory
-rendering, plus a longer run through natural token expiry. The new fallback awaits
-a real Chrome sign-in; it does not alter browser protections or reuse cookies.jar.
-An account with no eligible campaigns can legitimately return `[]`.
+Login-button fallback from an unavailable device code to Chrome).
+
+The packaged Windows candidate (`4cbbb84`) was launched in read-only
+`--check-campaigns` mode. Clicking Login opened the installed Chrome channel
+(154.0.8037.93), but Twitch displayed “目前不支持您的浏览器”. No successful
+dashboard response was captured, so this did not verify standalone login or
+campaign discovery in the executable. The user then confirmed that a separately
+and normally launched Chrome can open the campaigns page. This narrows the
+failure to the Playwright-launched session path, but does not isolate whether
+automation control, the temporary profile or another session difference triggers
+Twitch's page. Do not change browser protections or disguise automation to get
+past the page. The fallback opens Chrome and leaves the existing `cookies.jar`
+untouched; this run does not establish a supported end-to-end login. Remaining:
+identify a supported browser-session integration and verify actual Tk inventory
+rendering, plus a longer run through natural token expiry. An account with no
+eligible campaigns can legitimately return `[]`.
