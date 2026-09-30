@@ -1,0 +1,14 @@
+{
+  "campaign_id": "fb08089e-d453-411b-845b-eb5c54a2e6e8",
+  "campaign_name": "Rust Isles AR",
+  "drop_id": "95b060d8-b769-11f1-93cd-0a58a9feac02",
+  "game_id": "263490",
+  "benefit_ids": [
+    "0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11589"
+  ],
+  "benefit_name": "Rust Isles AR",
+  "starts_at": "2026-09-24T18:45:00Z",
+  "ends_at": "2026-10-04T23:58:59.999Z",
+  "source_type": "public_third_party_snapshot",
+  "source_url": "https://github.com/SunkwiBOT/twitch-drops-api/blob/811e19a49f7ada79e4edf4efbf163190c2bb2646/drops.json"
+}

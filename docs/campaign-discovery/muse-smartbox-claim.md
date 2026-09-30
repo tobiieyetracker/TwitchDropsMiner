@@ -1,6 +1,50 @@
 # Muse：匹配 SMARTBOX 身份的单次领取候选
 
-2026-10-01。当前是待实测候选，不是领取修复结论。默认只读，不启动观看、浏览器或常驻任务。
+2026-10-01。唯一候选已实测：原领取方法接受响应、无 challenge，进行中库存目标随后消失；
+严格领取确认尚未获得。不要重新提交领取。下述领取命令仅保留为实验记录。
+
+## a133686 的验证进展
+
+- 本机在已提交 HEAD 的干净副本中只叠加本次五个文件，163 项相关测试通过；
+  Muse 同步 `a1336861e4c6ac04a8b2864978ed6ee17b98d323` 后，40 项新增测试通过。
+- Muse 只读预检报告为 `probe-reports/smartbox-claim-preflight-a133686-20261001-0156.json`。
+  Codex 已直接读取 Muse 会话中的回报，尚未取得原始 JSON 的完整本地副本。
+  退出码 0、`preflight_ready`：旧 SMARTBOX token 有效，同账号原目标仍为 60/60、
+  `is_claimed:false`、真实实例存在，关联与前置资格均为 true。
+- 预检仅发出 validation 与 Inventory 两次请求，均 HTTP 200，无 challenge/429，
+  `watch_sends:0`、`claim.attempted:false`。Muse 报告两份 Cookie 及原、WEB journal
+  的运行前后 hash 一致；没有创建候选领取记录。
+- 唯一候选报告为 `probe-reports/smartbox-claim-a133686-20261001-015752.json`：
+  退出码 1、`claim_unconfirmed`、`phase:claim_confirmation`，
+  `error:claim_not_confirmed_by_inventory`。8 次请求均为 HTTP 200，无观看；
+  mutation 的 `response_challenge.present:false`，原方法 `miner_response_accepted:true`。
+  原 `_claim()` 在此次路径只会对 `ELIGIBLE_FOR_ALL` 或 `DROP_INSTANCE_ALREADY_CLAIMED`
+  返回 true，原始状态字符串未保存，不能补猜是哪一个。
+- 后续三次 Inventory 中原目标均 absent；这不等于 `isClaimed:false`，也不是新的
+  integrity 拒绝。`smartbox-claim-v1.json` 已持久保存 attempted，不能重提；
+  Muse 报告两份 Cookie、原和 WEB journal 的 hash 均保持不变。
+- 当前确认器仅查看 `dropCampaignsInProgress`，没有核对另一个已获奖励集合
+  `gameEventDrops`。原 miner 使用 benefit ID 与授予时间作辅助判断，官网也分别
+  展示进行中和已获奖励。但不能由目标消失推导领取成功，也没有证明服务端必移除
+  已领取活动。Muse 没有保存完整原响应或目标 benefit 映射，无法离线补回这些证据。
+
+## 只读补充：已获奖励集合
+
+固定公开快照的 [目标元数据](rust-isles-ar-benefit.json) 将原 campaign/drop 映射为
+唯一 benefit `0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11589`。
+该来源为第三方公共活动快照，不是账号资格或领取证据。
+`check_smartbox_awards.py` 只使用已有 SMARTBOX 候选 journal，验证账号并读取一次原
+Inventory，核对该 benefit 的实际授予时间，最多两次请求，不再 mutation。
+
+```bash
+DISPLAY=:99 python check_smartbox_awards.py --cookies cookies.jar.bak --proxy-env HTTPS_PROXY
+```
+
+若 `reward_grant_observed`，其含义仅为这份元数据对应的全部奖励在该账号的实际
+已获记录中出现，授予时间不早于候选尝试且不晚于本次读取。它不冒充 `isClaimed:true`，
+不改写旧 claim 结论或任何 journal；没有领取前 award baseline、映射来自公共快照，
+仍不足以排除共享 benefit 或其他客户端领取的归因歧义。
+未知、null、缺失、过旧或未来时间都不能认定本次已授予。
 
 新的依据是 [GrubDrops 作者的第一手报告](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5873543952)：其 SMARTBOX/TV 登录配合相同客户端身份，通过频道发现、Inventory 和直接 Go HTTP 路径观看并领取。其 [profile](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/profile.go)、[transport](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/client.go) 与 [claim](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/claim.go) 支持这一具体实现方向，但作者未附逐请求及领取后库存证据，不能替代 Muse 实测。
 
