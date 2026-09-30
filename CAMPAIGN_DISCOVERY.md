@@ -7,6 +7,9 @@ sign-in flow did not complete: the user reported being unable to sign in. This
 is not yet a verified end-to-end fix for the normal application startup flow.
 
 For the next Linux run, follow [the Muse validation handoff](LINUX_VALIDATION.md).
+The intended delivery is now unattended discovery, progress and claims on the
+user's Xvfb-only Linux host; see [cloud operation requirements](CLOUD_OPERATION.md).
+That is not implemented or verified end to end by this candidate.
 The later [SMARTBOX / ANDROID_APP comparison](docs/campaign-discovery/twitch-android-campaign-validation.md)
 still returned null with SMARTBOX-issued OAuth, including with fresh integrity.
 WEB-issued OAuth plus matching web identity and integrity returned campaigns with
@@ -52,6 +55,14 @@ Sign in directly on Twitch in the browser opened by the miner. Keep that browser
 and its Twitch tab open. The new context is isolated from the default browser
 profile and is not saved for reuse. It does not load or overwrite the existing
 `cookies.jar`. Sign-in is needed again after restarting the miner.
+
+Authenticated proxy URLs in `settings.proxy` are split into Playwright's `server`,
+`username` and `password` fields. Previously the URL was passed only as `server`,
+which lost embedded credentials during Playwright's proxy normalization. This fix
+does not establish the cause of every Linux `ERR_EMPTY_RESPONSE`. To test the
+actual proxy without login, use `check_browser_proxy.py` as described in the cloud
+operation handoff. The miner reads `settings.proxy`; the probe explicitly reads
+the environment variable selected with `--proxy-env`.
 
 `--check-campaigns` fetches inventory, discovers campaigns and retrieves their
 details once, then stops. It does not start maintenance, a watch loop, a websocket
@@ -118,7 +129,8 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (40 passed). Remaining:
+Run `python -m pytest -q tests` for the offline suite (56 passed after adding proxy
+regressions and the anonymous connectivity probe). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
 rendering, plus a longer run through natural token expiry. No root cause was
 established for the failed Edge sign-in; browser protections were not changed.

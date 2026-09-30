@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import time
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 from exceptions import LoginException
@@ -25,6 +25,39 @@ HEADER_NAMES = (
     "Authorization", "Client-Id", "User-Agent", "X-Device-Id",
     "Client-Session-Id", "Client-Version",
 )
+
+
+def browser_proxy_settings(proxy: str) -> dict[str, str]:
+    """Translate the miner's proxy URL to Playwright's separate auth fields."""
+    try:
+        url = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+        host, port = url.hostname, url.port
+        if (
+            url.scheme not in {"http", "https", "socks4", "socks5"}
+            or not host or url.path not in {"", "/"} or url.query or url.fragment
+        ):
+            raise ValueError
+        if ":" in host:
+            host = f"[{host}]"
+        server = f"{url.scheme}://{host}"
+        if port is not None:
+            server += f":{port}"
+        options = {"server": server}
+        if url.username is not None:
+            if url.scheme in {"socks4", "socks5"}:
+                raise LoginException(
+                    "The browser does not support authenticated SOCKS proxies. "
+                    "Use an HTTP/HTTPS proxy supported by your network."
+                )
+            options["username"] = unquote(url.username)
+            options["password"] = unquote(url.password or "")
+        return options
+    except ValueError:
+        # URL parser errors can contain the original credentials or address.
+        raise LoginException(
+            "Invalid browser proxy URL. Expected scheme://[user:password@]host:port."
+        ) from None
+
 
 # Called only inside the normal Twitch page, after the user has signed in.
 # window.fetch is intentionally used so Twitch's own request handling runs.
@@ -149,7 +182,7 @@ class TwitchWebSession:
                 if self.channel != "chromium":
                     launch["channel"] = self.channel
                 if self.proxy:
-                    launch["proxy"] = {"server": self.proxy}
+                    launch["proxy"] = browser_proxy_settings(self.proxy)
                 self._browser = await self._playwright.chromium.launch(**launch)
                 # Ephemeral context: no access to the user's default browser profile,
                 # and no auth cookies, integrity token or passwords written to disk.

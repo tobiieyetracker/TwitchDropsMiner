@@ -18,6 +18,40 @@ HEADERS = {
 }
 
 
+@pytest.mark.parametrize(("url", "expected"), [
+    ("proxy.example:8080", {"server": "http://proxy.example:8080"}),
+    ("https://proxy.example/", {"server": "https://proxy.example"}),
+    ("http://alice:secret@proxy.example:3128", {
+        "server": "http://proxy.example:3128", "username": "alice", "password": "secret",
+    }),
+    ("http://name%40tenant:p%3Aa%2Fs%25%2B@proxy.example:3128", {
+        "server": "http://proxy.example:3128", "username": "name@tenant", "password": "p:a/s%+",
+    }),
+    ("http://alice:secret@[2001:db8::1]:8080", {
+        "server": "http://[2001:db8::1]:8080", "username": "alice", "password": "secret",
+    }),
+    ("socks5://127.0.0.1:1080", {"server": "socks5://127.0.0.1:1080"}),
+])
+def test_browser_proxy_preserves_protocol_address_and_separate_credentials(url, expected):
+    assert web_session.browser_proxy_settings(url) == expected
+
+
+@pytest.mark.parametrize("url", [
+    "http://alice:secret@proxy.example:bad-port",
+    "http://alice:secret@[invalid-ipv6]:8080",
+    "http://alice:secret@proxy.example/path",
+    "ftp://alice:secret@proxy.example:21",
+    "http://alice:secret@",
+    "socks5://alice:secret@proxy.example:1080",
+])
+def test_invalid_browser_proxy_errors_do_not_expose_credentials(url):
+    with pytest.raises(LoginException) as error:
+        web_session.browser_proxy_settings(url)
+    assert "secret" not in str(error.value)
+    assert "alice" not in str(error.value)
+    assert "proxy.example" not in str(error.value)
+
+
 def session(monkeypatch):
     monkeypatch.setattr(web_session, "time", lambda: 1000)
     result = TwitchWebSession(notify=Mock())
@@ -144,10 +178,11 @@ def test_login_waits_for_dashboard_to_pass_the_websites_own_check(user):
     assert credentials_from_response(HEADERS, {"data": {"currentUser": user}}) is None
 
 
-def test_normal_start_waits_for_a_successful_dashboard_without_saving_a_profile(monkeypatch):
+@pytest.mark.parametrize("proxy", ["", "http://alice:secret@proxy.example:3128"])
+def test_normal_start_waits_for_a_successful_dashboard_without_saving_a_profile(monkeypatch, proxy):
     import playwright.async_api
 
-    client = TwitchWebSession(notify=Mock())
+    client = TwitchWebSession(proxy=proxy, notify=Mock())
     response = SimpleNamespace(
         request=SimpleNamespace(all_headers=AsyncMock(return_value=HEADERS)),
         json=AsyncMock(return_value={"data": {"currentUser": {"id": "42", "dropCampaigns": []}}}),
@@ -178,6 +213,12 @@ def test_normal_start_waits_for_a_successful_dashboard_without_saving_a_profile(
     asyncio.run(scenario())
     chromium.launch.assert_awaited_once()
     assert chromium.launch.call_args.kwargs["headless"] is False
+    if proxy:
+        assert chromium.launch.call_args.kwargs["proxy"] == {
+            "server": "http://proxy.example:3128", "username": "alice", "password": "secret",
+        }
+    else:
+        assert "proxy" not in chromium.launch.call_args.kwargs
     chromium.launch_persistent_context.assert_not_called()
     browser.new_context.assert_awaited_once_with()
     runtime.stop.assert_awaited_once()

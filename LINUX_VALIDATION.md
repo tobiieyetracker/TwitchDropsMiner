@@ -1,5 +1,9 @@
 # Muse：Linux campaign 发现验证交接
 
+用户已明确最终目标：在仅有 Xvfb 的 Linux 云电脑上，全天候发现活动、累计观看进度并
+自动领取。本文的只读检查是前期验证，不是最终交付范围。后续任务和最新阻塞见
+[CLOUD_OPERATION.md](CLOUD_OPERATION.md)，不要继续将“本次不观看、不领取”作为永久限制。
+
 请在用户实际运行矿机的 Linux 环境验证这份候选补丁，并根据真实失败修正。
 先读本文、[CAMPAIGN_DISCOVERY.md](CAMPAIGN_DISCOVERY.md) 和
 [客户端组合实测记录](docs/campaign-discovery/twitch-android-campaign-validation.md)，
@@ -97,7 +101,9 @@ Campaign discovery check completed: ... campaigns.
 
 请报告：环境和提交、执行命令、离线测试结果、登录是否成功、网页与矿机活动数量、
 新活动样例、关联状态、刷新验证方式与结果、错误摘要及代码修改。
-明确区分“只读发现通过”“自然刷新通过”和“尚未验证”；本次不测试实际观看或领取。
+明确区分“只读发现通过”“自然刷新通过”和“尚未验证”；本节检查不测试实际观看或领取。
+用户已授权后续全天候自动观看和领取。前置验证通过后按
+[全天候运行交接](CLOUD_OPERATION.md) 继续真实进度、领取和恢复验证。
 不要因为首次列表成功就宣称所有 Linux 功能和长期运行均已修复。
 
 ## 已保存的证据
