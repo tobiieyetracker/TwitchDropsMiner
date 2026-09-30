@@ -36,7 +36,10 @@ DENIED = {
 def response(body, *, operations=QUERY, headers=HEADERS, status=200, url=probe.GQL_URL):
     return SimpleNamespace(
         url=url, status=status, json=AsyncMock(return_value=body),
-        request=SimpleNamespace(post_data_json=operations, all_headers=AsyncMock(return_value=headers), url=url),
+        request=SimpleNamespace(
+            post_data_json=operations, all_headers=AsyncMock(return_value=headers), url=url,
+            method="POST", resource_type="fetch", failure=None,
+        ),
     )
 
 
@@ -60,7 +63,7 @@ def test_capture_reports_resource_and_integrity_failures_without_secrets():
         capture = probe.BrowserCapture(TOKEN, "42", report)
         capture.resource_failure(SimpleNamespace(
             url="https://assets.twitch.tv/secret?token=must-not-print",
-            failure="net::ERR_CERT_AUTHORITY_INVALID must-not-print",
+            failure="net::ERR_CERT_AUTHORITY_INVALID must-not-print", resource_type="script",
         ))
         capture.page_error(RuntimeError("must-not-print"))
         await capture.inspect(response(
@@ -69,6 +72,7 @@ def test_capture_reports_resource_and_integrity_failures_without_secrets():
         await capture.inspect(response(DENIED))
         assert report["resource_failures"][0] == {
             "host": "assets.twitch.tv", "http_status": None, "error": "ERR_CERT_AUTHORITY_INVALID",
+            "resource_type": "script", "role": "page_resource",
         }
         assert report["integrity_responses"] == [{"http_status": 200, "token_returned": True}]
         invalid_json = response({}, status=503, url="https://gql.twitch.tv/integrity")
@@ -106,6 +110,96 @@ def test_capture_extracts_only_dashboard_from_batch_with_mutation():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("phase", ["none", "pending", "failed", "partial", "finished"])
+def test_integrity_lifecycle_distinguishes_no_request_from_no_response(phase):
+    report = {"integrity_responses": []}
+    observation = probe.NetworkObservation(report)
+    reply = response({}, url="https://gql.twitch.tv/integrity?must-not-print")
+    if phase != "none":
+        observation.request(reply.request)
+    if phase in {"partial", "finished"}:
+        observation.response(reply)
+    if phase == "finished":
+        observation.finished(reply.request)
+    if phase == "failed":
+        reply.request.failure = "net::ERR_CERT_AUTHORITY_INVALID must-not-print"
+        observation.failed(reply.request)
+    observation.freeze()
+    counts = report["integrity_network"]
+    assert counts["requests"] == int(phase != "none")
+    assert counts["request_methods"] == ({} if phase == "none" else {"POST": 1})
+    assert counts["responses"] == int(phase in {"partial", "finished"})
+    assert counts["awaiting_response"] == int(phase == "pending")
+    assert counts["awaiting_body"] == int(phase == "partial")
+    assert counts["finished"] == int(phase == "finished")
+    assert counts["failed"] == int(phase == "failed")
+    # The old response-body list can be empty in all of these different states.
+    assert report["integrity_responses"] == []
+    snapshot = deepcopy(report)
+    observation.finished(reply.request)
+    observation.freeze()
+    assert report == snapshot
+    assert "must-not-print" not in json.dumps(report)
+
+
+def test_failure_summary_retains_sdk_script_after_twenty_image_errors():
+    async def scenario():
+        report = {}
+        capture = probe.BrowserCapture(TOKEN, "42", report)
+        for _ in range(25):
+            request = SimpleNamespace(
+                url="https://static-cdn.jtvnw.net/fixture-secret.png?token=must-not-print",
+                resource_type="image", failure="net::ERR_CERT_AUTHORITY_INVALID",
+            )
+            capture.network.request(request)
+            capture.resource_failure(request)
+        sdk = SimpleNamespace(
+            url="https://k.twitchcdn.net/fixture-secret/p.js?token=must-not-print",
+            resource_type="script", failure="net::ERR_TIMED_OUT",
+        )
+        capture.network.request(sdk)
+        capture.resource_failure(sdk)
+        await capture.close()
+        assert len(report["resource_failures"]) == 20
+        groups = {item["host"]: item for item in report["network_summary"]}
+        assert groups["static-cdn.jtvnw.net"]["resource_type"] == "image"
+        assert groups["static-cdn.jtvnw.net"]["failed"] == 25
+        assert groups["k.twitchcdn.net"]["resource_type"] == "script"
+        assert groups["k.twitchcdn.net"]["role"] == "integrity_sdk_script"
+        assert groups["k.twitchcdn.net"]["network_errors"] == {"ERR_TIMED_OUT": 1}
+        assert groups["k.twitchcdn.net"]["outstanding"] == 0
+        assert "must-not-print" not in json.dumps(report) and "fixture-secret" not in json.dumps(report)
+
+    asyncio.run(scenario())
+
+
+def test_integrity_headers_are_counted_even_when_response_body_hangs():
+    async def scenario():
+        report = {}
+        capture = probe.BrowserCapture(TOKEN, "42", report)
+
+        async def unfinished_body():
+            await asyncio.Event().wait()
+
+        reply = response({}, url="https://gql.twitch.tv/integrity")
+        reply.json = unfinished_body
+        capture.network.request(reply.request)
+        capture.response(reply)
+        await asyncio.sleep(0)
+        await capture.close()
+        assert not capture.tasks
+        assert report["integrity_network"]["requests"] == 1
+        assert report["integrity_network"]["responses"] == 1
+        assert report["integrity_network"]["awaiting_body"] == 1
+        assert report["integrity_requests"][0]["http_status"] == 200
+        assert report["integrity_requests"][0]["state"] == "awaiting_body"
+        before = deepcopy(report)
+        await capture.close()
+        assert report == before
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("mutation", ["name", "hash", "raw_query", "variables"])
 def test_unsupported_payloads_cannot_be_used_for_python_control(mutation):
     query = deepcopy(QUERY)
@@ -128,11 +222,18 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
     headers = {**HEADERS, "Authorization": "OAuth wrong-fixture-token"} if case == "wrong_oauth" else HEADERS
 
     async def navigate(*args, **kwargs):
-        callbacks["response"](response(DENIED if case == "denied" else SUCCESS, headers=headers))
+        reply = response(DENIED if case == "denied" else SUCCESS, headers=headers)
+        callbacks["request"](reply.request)
+        callbacks["response"](reply)
+        callbacks["requestfinished"](reply.request)
         await asyncio.sleep(0)
 
-    page = SimpleNamespace(on=lambda event, callback: callbacks.update({event: callback}), goto=AsyncMock(side_effect=navigate))
+    page = SimpleNamespace(
+        on=lambda event, callback: callbacks.update({event: callback}), goto=AsyncMock(side_effect=navigate),
+        evaluate=AsyncMock(return_value={"sdk_global_present": False, "sdk_ready": None}),
+    )
     context = SimpleNamespace(
+        on=lambda event, callback: callbacks.update({event: callback}),
         add_cookies=AsyncMock(), new_page=AsyncMock(return_value=page),
         cookies=AsyncMock(return_value=[{"name": "auth-token", "value": "changed" if case == "changed_login" else TOKEN}]),
     )
@@ -199,6 +300,10 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
                 "secure": True, "sameSite": "Lax",
             }])
             browser.close.assert_awaited_once()
+            page.evaluate.assert_awaited_once_with(probe.PAGE_STATUS)
+            assert report["network_summary"][0]["started"] == 1
+            assert report["network_summary"][0]["finished"] == 1
+            assert report["integrity_network"]["requests"] == 0
         if case in {"success", "python_denied"}:
             assert len(post_calls) == 1
             url, options = post_calls[0]

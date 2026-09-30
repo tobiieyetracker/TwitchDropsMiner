@@ -1,9 +1,10 @@
 # Muse：全天候运行目标与当前下一步
 
-最新状态：Muse 已收到并验证用户提供的 WEB token，经本地转发器也能加载 Twitch，
-但报告网页自身的活动查询仍被 integrity 拒绝。Muse 随后纠正证书判断：example.com
-由 Hatch 签发，www.twitch.tv 和 gql.twitch.tv 则报告 GlobalSign 证书，撤回 Twitch
-遭 MITM 的解释。“检测到自动化浏览器”也尚未证实。下一步运行下述独立诊断入口。
+最新状态：Muse 的 `656add8` 探针已确认 WEB Cookie 导入及网页身份匹配成功，
+但官网活动查询仍被 integrity 拒绝。旧版 `integrity_responses: []` 不能证明没有发出
+请求；新版已补请求生命周期、资源类型和 SDK 状态观测。
+已有 bundle 中的关键 SDK 脚本来自 `k.twitchcdn.net`，不能只盯着图片 CDN。
+先读[启动依赖证据和针对性验证步骤](docs/campaign-discovery/twitch-sdk-dependency.md)。
 
 用户希望以 Python 为运行主体。请同时阅读
 [纯 Python 鉴权实测](PYTHON_AUTH_VALIDATION.md)：Python 裸调 integrity 得到了 token，
@@ -22,7 +23,7 @@
 
 - Ubuntu 24.04.5 LTS / x86_64 / Python 3.12.3；早期验证提交为 `d0c2a9e`，
   后续已确认在 `aa6b215` 上测试代理修正。
-- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 78 项通过，
+- `DISPLAY=:99` 下原 40 项离线测试通过；Windows 当前 85 项通过，
   不能视作 Muse 已运行新增测试。
 - Chrome for Testing 154.0.8037.92 安装于 `/opt/chrome-linux64`，
   `/opt/google/chrome/chrome` 是对应软链接；`channel="chrome"` 可以找到并启动浏览器。
@@ -37,6 +38,9 @@
   被替换的判断：example.com 为 Hatch，两个 Twitch 域名为 GlobalSign。
 - “代理根据 Chrome 进程拒绝 TCP”仍是解释假设；可观察事实是 Chrome 直接连接失败、
   Python/转发路径可用。“浏览器自动化特征使 token 信任度不足”也尚无隔离变量的对照。
+- `656add8` 探针报告 Cookie 导入成功：网页 OAuth、WEB client-id 和用户匹配，
+  dashboard 明确返回 integrity challenge，且请求未携带 Client-Integrity。
+  Python 对照被跳过。资源存在证书错误，但旧探针没有记录足够的资源分类信息。
 - Muse 报告 `~` 之外的数据会在 VM 重启后清空，且代理密码会轮换。
   程序、会话存储和恢复所需文件应放在持久的用户目录；启动时读取当前代理配置。
 - Linux 的 WEB 活动发现、真实进度、领取、自然刷新、重启恢复均未验证。
@@ -66,10 +70,18 @@ DISPLAY=:99 python check_campaign_auth.py --cookie-file ./cookies.jar --channel 
 - `web_token_valid`：token 有效且签发方为 WEB；不等于浏览器已经使用它。
 - `dashboard_responses`：官网响应的 OAuth/客户端/账号匹配结果、活动字段类型和数量、
   是否携带完整性头、是否收到明确的完整性拒绝。静默 `null` 不被标成已证明的 integrity。
-- `integrity_responses`：网页自身完整性请求的 HTTP 状态和是否返回 token；最多记录 20 条。
-- `resource_failures` / `page_errors`：前 20 条资源网络/HTTP 失败及脚本异常计数。
-  Twitch 主站和 GQL 证书正常不等于所有页面资源都加载成功，应检查 assets.twitch.tv 等。
-  不输出资源 URL、脚本错误正文或请求头。
+- `integrity_network` / `integrity_requests`：本浏览器上下文观察到的完整性请求生命周期。
+  requests、responses、finished、failed、awaiting_response、awaiting_body 分开计数；
+  详情最多显示 20 条，请求合计不受此限制。计数在关闭浏览器前冻结，不混入清理时的中止。
+- `integrity_responses`：响应体中是否返回 token；最多记录 20 条。
+  此项为空不能推断请求从未发出，应结合前一项判断。
+- `network_summary`：按公开主机、浏览器资源类型及用途汇总全部请求的完成、失败、
+  HTTP 错误和等待状态。新增识别 `k.twitchcdn.net` 与 `static-cdn.jtvnw.net`。
+  图片错误再多也不会遮住后续 SDK 脚本的汇总结果。
+- `resource_failures` / `page_errors`：前 20 条资源失败详情及脚本异常计数。
+  页面主站和 GQL 证书正常不等于 SDK 域名可达。输出不含 URL、脚本错误正文或请求头。
+- `page_status`：结束时读取文档状态、SDK 脚本元素/全局对象是否存在以及 SDK 是否就绪。
+  不加载或替换 SDK，不修改网页功能开关。页面无法读取时输出脱敏错误类型。
 - `python_dashboard`：仅当官网查询成功、身份匹配且 Cookie 未变时，Python 才复制该
   请求的身份和完整性头，单独发送一次 ViewerDropsDashboard。不会重发原批次的其他操作。
   若官网始终失败，此项不会执行；`no_accepted_website_dashboard` 连同前述状态用于定位。
@@ -100,7 +112,7 @@ Cookie 并删除原文件，再启动设备登录。现在对此明确报错并�
 
 这项保护本身不增加 WEB Cookie 导入、浏览器会话持久化或完整性恢复能力。
 Cookie 保护提交的 7 项回归测试使用临时文件和模拟验证响应；当时 63 项离线测试通过。
-新增独立探针后为 78 项通过，仍需 Muse 真实执行。
+新增独立探针后为 78 项通过，补齐请求生命周期观测后为 85 项通过；新增观测仍需 Muse 实测。
 
 ## 已完成的代理认证检查（历史步骤）
 

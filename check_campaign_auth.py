@@ -20,11 +20,145 @@ from web_session import GQL_URL, WEB_URL, WEB_CLIENT_ID, HEADER_NAMES, browser_p
 
 VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
 READ_HEADERS = {name.lower() for name in (*HEADER_NAMES, "Client-Integrity", "Origin", "Referer")}
-KNOWN_HOSTS = {"www.twitch.tv", "gql.twitch.tv", "id.twitch.tv", "assets.twitch.tv"}
+KNOWN_HOSTS = {
+    "www.twitch.tv", "gql.twitch.tv", "id.twitch.tv", "assets.twitch.tv",
+    "static-cdn.jtvnw.net", "k.twitchcdn.net",
+}
+RESOURCE_TYPES = {
+    "document", "stylesheet", "image", "media", "font", "script", "texttrack",
+    "xhr", "fetch", "eventsource", "websocket", "manifest", "other",
+}
+PAGE_STATUS = """() => {
+    const sdk = window.KPSDK;
+    let ready = null;
+    try { if (sdk && typeof sdk.isReady === 'function') ready = !!sdk.isReady(); }
+    catch (_) {}
+    return {
+        document_ready_state: document.readyState,
+        script_elements: document.scripts.length,
+        sdk_script_present: Array.from(document.scripts).some(script => {
+            try {
+                const url = new URL(script.src);
+                return url.hostname === 'k.twitchcdn.net' && url.pathname.endsWith('/p.js');
+            } catch (_) { return false; }
+        }),
+        sdk_global_present: !!sdk,
+        sdk_ready: ready,
+    };
+}"""
 
 
 class ProbeFailure(Exception):
     """Only fixed diagnostic codes, never server messages or credentials."""
+
+
+def resource_info(request: Any) -> dict[str, str]:
+    url = urlsplit(request.url)
+    host = url.hostname
+    resource_type = getattr(request, "resource_type", "other")
+    role = "page_resource"
+    if url.scheme == "https" and host == "gql.twitch.tv" and url.path == "/integrity":
+        role = "integrity"
+    elif host == "k.twitchcdn.net":
+        role = "integrity_sdk_script" if url.path.endswith("/p.js") else "integrity_sdk_resource"
+    return {
+        "host": host if host in KNOWN_HOSTS else "other",
+        "resource_type": resource_type if resource_type in RESOURCE_TYPES else "other",
+        "role": role,
+    }
+
+
+class NetworkObservation:
+    """Count lifecycle events before reading bodies; keep only redacted aggregates."""
+    def __init__(self, report: dict[str, Any]):
+        self.report = report
+        self.closed = False
+        self.groups: dict[tuple[str, ...], dict[str, Any]] = {}
+        self.integrity: dict[int, tuple[Any, dict[str, Any]]] = {}
+
+    def _group(self, request: Any) -> dict[str, Any]:
+        info = resource_info(request)
+        key = tuple(info.values())
+        return self.groups.setdefault(key, {
+            **info, "started": 0, "responses": 0, "finished": 0, "failed": 0,
+            "http_errors": 0, "network_errors": {},
+        })
+
+    def _integrity_request(self, request: Any) -> dict[str, Any] | None:
+        if resource_info(request)["role"] != "integrity":
+            return None
+        key = id(request)
+        if key not in self.integrity:
+            method = getattr(request, "method", "other")
+            # Retain the request object internally so Python cannot reuse its id.
+            self.integrity[key] = request, {
+                "method": method if method in {"GET", "POST", "OPTIONS"} else "other",
+                "request_seen": False, "response_received": False,
+                "finished": False, "failed": False, "http_status": None, "error": None,
+            }
+        return self.integrity[key][1]
+
+    def request(self, request: Any) -> None:
+        if self.closed:
+            return
+        self._group(request)["started"] += 1
+        if (entry := self._integrity_request(request)) is not None:
+            entry["request_seen"] = True
+
+    def response(self, response: Any) -> None:
+        if self.closed:
+            return
+        group = self._group(response.request)
+        group["responses"] += 1
+        group["http_errors"] += int(response.status >= 400)
+        if (entry := self._integrity_request(response.request)) is not None:
+            entry.update(response_received=True, http_status=response.status)
+
+    def finished(self, request: Any) -> None:
+        if self.closed:
+            return
+        self._group(request)["finished"] += 1
+        if (entry := self._integrity_request(request)) is not None:
+            entry["finished"] = True
+
+    def failed(self, request: Any) -> None:
+        if self.closed:
+            return
+        code = error_code(RuntimeError(request.failure or ""))
+        group = self._group(request)
+        group["failed"] += 1
+        group["network_errors"][code] = group["network_errors"].get(code, 0) + 1
+        if (entry := self._integrity_request(request)) is not None:
+            entry.update(failed=True, error=code)
+
+    def freeze(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        entries = [entry for _, entry in self.integrity.values()]
+        for entry in entries:
+            entry["state"] = (
+                "failed" if entry["failed"] else "finished" if entry["finished"] else
+                "awaiting_body" if entry["response_received"] else "awaiting_response"
+            )
+        self.report["integrity_requests"] = entries[:20]
+        self.report["integrity_network"] = {
+            "requests": sum(entry["request_seen"] for entry in entries),
+            "request_methods": {
+                method: sum(entry["request_seen"] and entry["method"] == method for entry in entries)
+                for method in sorted({entry["method"] for entry in entries if entry["request_seen"]})
+            },
+            "responses": sum(entry["response_received"] for entry in entries),
+            **{state: sum(entry["state"] == state for entry in entries) for state in (
+                "finished", "failed", "awaiting_response", "awaiting_body",
+            )},
+        }
+        self.report["network_summary"] = [
+            {**group, "outstanding": max(0, group["started"] - group["finished"] - group["failed"])}
+            for _, group in sorted(self.groups.items())
+        ]
+        self.integrity.clear()
+        self.groups.clear()
 
 
 def read_token(path: Path) -> str:
@@ -109,20 +243,26 @@ class BrowserCapture:
         self.tasks: set[asyncio.Task] = set()
         self.closed = False
         report.update(dashboard_responses=[], integrity_responses=[], resource_failures=[], page_errors=0)
+        self.network = NetworkObservation(report)
 
     def response(self, response: Any) -> None:
         if not self.closed:
+            # Record response headers immediately, even if response.json() never completes.
+            self.network.response(response)
             task = asyncio.create_task(self.inspect(response))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
 
     def resource_failure(self, request: Any, *, status: int | None = None) -> None:
-        if self.closed or len(self.report["resource_failures"]) >= 20:
+        if self.closed:
             return
-        host = urlsplit(request.url).hostname
+        if status is None:
+            self.network.failed(request)
+        if len(self.report["resource_failures"]) >= 20:
+            return
         # Keep no URLs, query strings, console messages or request headers.
         self.report["resource_failures"].append({
-            "host": host if host in KNOWN_HOSTS else "other",
+            **resource_info(request),
             "http_status": status,
             "error": error_code(RuntimeError(request.failure or "")) if status is None else None,
         })
@@ -135,7 +275,7 @@ class BrowserCapture:
         try:
             if response.status >= 400:
                 self.resource_failure(response.request, status=response.status)
-            if response.url == "https://gql.twitch.tv/integrity":
+            if resource_info(response.request)["role"] == "integrity":
                 summary = {"http_status": response.status, "token_returned": False}
                 if len(self.report["integrity_responses"]) < 20:
                     self.report["integrity_responses"].append(summary)
@@ -179,7 +319,11 @@ class BrowserCapture:
             self.report["capture_error"] = str(error) if isinstance(error, ProbeFailure) else error_code(error)
 
     async def close(self) -> None:
+        if self.closed:
+            return
         self.closed = True
+        # Freeze before browser cleanup can generate ERR_ABORTED events.
+        self.network.freeze()
         tasks = list(self.tasks)
         for task in tasks:
             task.cancel()
@@ -226,6 +370,7 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                     if proxy_options:
                         launch["proxy"] = proxy_options
                     browser = await runtime.chromium.launch(**launch)
+                    page = None
                     try:
                         report["browser_version"] = browser.version
                         report["proxy_auth"] = bool(proxy_options and "username" in proxy_options)
@@ -234,9 +379,11 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                             "name": "auth-token", "value": token, "url": "https://www.twitch.tv/",
                             "secure": True, "sameSite": "Lax",
                         }])
+                        context.on("request", capture.network.request)
+                        context.on("response", capture.response)
+                        context.on("requestfinished", capture.network.finished)
+                        context.on("requestfailed", capture.resource_failure)
                         page = await context.new_page()
-                        page.on("response", capture.response)
-                        page.on("requestfailed", capture.resource_failure)
                         page.on("pageerror", capture.page_error)
                         report["phase"] = "website_dashboard"
                         deadline = asyncio.get_running_loop().time() + seconds
@@ -264,8 +411,16 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                             raise ProbeFailure("python_dashboard_not_accepted")
                         report.update(state="passed", phase="complete")
                     finally:
-                        await capture.close()
-                        await browser.close()
+                        try:
+                            await capture.close()
+                            if page is not None:
+                                try:
+                                    # Read normal SDK status only; do not load, configure or replace it.
+                                    report["page_status"] = await asyncio.wait_for(page.evaluate(PAGE_STATUS), 5)
+                                except Exception as error:
+                                    report["page_status_error"] = error_code(error)
+                        finally:
+                            await browser.close()
             finally:
                 await capture.close()
         return 0, report

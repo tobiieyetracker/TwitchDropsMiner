@@ -91,6 +91,11 @@ It leaves the selected cookie file untouched, observes the website's dashboard,
 and performs one Python control read only after that website request succeeds
 for the expected identity. It uses normal browser settings and retains certificate
 verification. This is a diagnostic import, not persistent authentication in the miner.
+Muse confirmed the imported WEB token matched the website's request and user, but
+the dashboard was challenged without an integrity header. The diagnostic now
+separately observes requests, responses, completion and failure, and distinguishes
+SDK scripts from images. An empty response list did not establish that no request
+was sent. See [the SDK dependency evidence](docs/campaign-discovery/twitch-sdk-dependency.md).
 
 ## Recovery and limits
 
@@ -144,9 +149,9 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (78 passed, including cookie
+Run `python -m pytest -q tests` for the offline suite (85 passed, including cookie
 preservation and the standalone diagnostic's identity checks, read-only batch
-extraction and redacted output). Remaining:
+extraction, network lifecycle observation and redacted output). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
 rendering, plus a longer run through natural token expiry. No root cause was
 established for the failed Edge sign-in; browser protections were not changed.
