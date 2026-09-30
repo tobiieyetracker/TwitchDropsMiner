@@ -68,6 +68,20 @@ Muse 同步 `e4b3cb3ed1f00bfafc4564974a4b606518014aed` 后，38 项新增测试�
 领取前保存官方 benefit 映射、已获奖励基线及脱敏 mutation 状态，再比较领取后结果；
 不能降低标准，把原目标消失或旧奖励记录当作新领取成功。
 
+### 用户核对已领取记录后的时间线补充
+
+用户在官方界面看到了约五小时前已领取 Rust Isles AR，并表示当时可能运行了
+Windows 版 miner。因此不具备“只有 Muse 运行”的排他条件。
+Muse 随后只读原 `journal.json` 回报 `attempted_at:2026-09-30T13:06:28Z`：
+这比已获奖励记录的 `13:02:08Z` 晚 4 分 20 秒，按这些记录不能把该授予归因给
+原 `7614144` 的领取请求，更不能归因于后来的 WEB 候选或 SMARTBOX 尝试。
+Windows 是可能来源，尚无相应领取日志证明；本机已知构建目录的 `dist/log.txt`
+为空，并不能证明其他 Windows 安装未运行。未为这次时间线核对新增 Twitch 请求。
+
+用户指定后续需要新频道实验时使用 `https://www.twitch.tv/rainbow6`，不继续选择
+hJune 或其他频道。需先核对该频道实际活动和账号未获奖励基线；指定频道本身不证明
+当时有可测试的活动，也不改变本次原 AR 目标禁止重提的规则。
+
 新的依据是 [GrubDrops 作者的第一手报告](https://github.com/DevilXD/TwitchDropsMiner/issues/1165#issuecomment-5873543952)：其 SMARTBOX/TV 登录配合相同客户端身份，通过频道发现、Inventory 和直接 Go HTTP 路径观看并领取。其 [profile](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/profile.go)、[transport](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/client.go) 与 [claim](https://github.com/aalejandrofer/GrubDrops/blob/855fae41983d30cfa03e6979fe1510358df79224/internal/platform/twitch/claim.go) 支持这一具体实现方向，但作者未附逐请求及领取后库存证据，不能替代 Muse 实测。
 
 此前 Muse 的领取失败使用 WEB 身份；SMARTBOX 的既有对照是搭配 ANDROID_APP 查询 dashboard。它们没有验证同签发方 SMARTBOX 领取。旧 `muse-web-claim-candidate.md` 中停止换客户端和新候选的要求属于那次 WEB hash 实验的历史边界；本次是源码证据支持的新身份对照，保留所有旧记录，不重新执行 WEB 失败尝试，不需要用户再次传话确认。
