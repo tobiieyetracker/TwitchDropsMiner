@@ -181,6 +181,78 @@ def test_matching_saved_login_is_used_and_cookies_still_saved_at_shutdown(cookie
     asyncio.run(scenario())
 
 
+def test_read_only_campaign_check_preserves_saved_cookie_file(cookie_path):
+    async def scenario():
+        client = saved_client(cookie_path, [valid_token()])
+        client.settings.check_campaigns = True
+        original = cookie_path.read_bytes()
+        try:
+            await client._auth_state.validate()
+            assert client._auth_state._logged_in.is_set()
+            session = await client.get_session()
+            session.cookie_jar.update_cookies(
+                {"test-read-only-change": "not-persisted"}, client._client_type.CLIENT_URL,
+            )
+        finally:
+            await client.shutdown()
+        assert cookie_path.read_bytes() == original
+        assert client._auth_state._oauth_login.await_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_read_only_campaign_check_rejects_invalid_token_without_login_or_cookie_write(cookie_path):
+    async def scenario():
+        client = saved_client(cookie_path, [(401, {})])
+        client.settings.check_campaigns = True
+        original = cookie_path.read_bytes()
+        try:
+            with pytest.raises(LoginException, match="will not clear cookies or start"):
+                await client._auth_state.validate()
+            client._auth_state._oauth_login.assert_not_awaited()
+            assert not client._auth_state._logged_in.is_set()
+        finally:
+            await client.shutdown()
+        assert cookie_path.read_bytes() == original
+
+    asyncio.run(scenario())
+
+
+def test_read_only_campaign_check_rejects_missing_token_without_login_or_cookie_write(cookie_path):
+    async def scenario():
+        client = saved_client(cookie_path, [])
+        aiohttp.CookieJar().save(cookie_path)
+        client.settings.check_campaigns = True
+        original = cookie_path.read_bytes()
+        try:
+            with pytest.raises(LoginException, match="No saved login token"):
+                await client._auth_state.validate()
+            client._auth_state._oauth_login.assert_not_awaited()
+            assert not client.validation_headers
+            assert not client._auth_state._logged_in.is_set()
+        finally:
+            await client.shutdown()
+        assert cookie_path.read_bytes() == original
+
+    asyncio.run(scenario())
+
+
+def test_explicit_cookie_file_is_selected_for_read_only_campaign_check(monkeypatch, tmp_path):
+    cookie_file = tmp_path / "saved-smartbox.jar"
+    settings = SimpleNamespace(
+        smartbox_auth=True,
+        browser_auth=False,
+        cookie_file=str(cookie_file),
+    )
+    monkeypatch.setattr(twitch, "GUIManager", lambda _: SimpleNamespace())
+    monkeypatch.setattr(twitch, "WebsocketPool", lambda _: SimpleNamespace())
+
+    client = Twitch(settings)
+
+    assert client._client_type is ClientType.SMARTBOX
+    assert client.cookie_path == cookie_file
+
+
 def test_expired_cookie_can_be_replaced_by_valid_device_login(cookie_path):
     async def scenario():
         client = saved_client(cookie_path, [(401, {}), valid_token()])

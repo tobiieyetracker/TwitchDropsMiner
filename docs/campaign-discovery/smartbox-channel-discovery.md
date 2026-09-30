@@ -9,9 +9,12 @@ An explicit channel login can be added even if it is outside those directory
 results.
 
 ```bash
-DISPLAY=:99 python main.py --smartbox-auth --check-campaigns --campaign-channel rainbow6
+DISPLAY=:99 python main.py --smartbox-auth --check-campaigns --cookie-file cookies.jar.bak --campaign-channel rainbow6
 ```
 
+`--cookie-file` is accepted only with `--check-campaigns`. That mode reads the
+existing cookie jar without saving to it and exits instead of starting a login
+flow when the token is absent, invalid, or belongs to a different client.
 This checks Inventory and the `rainbow6` channel only. To broaden the scan, add
 one or more `--campaign-game "Game Name"` arguments; each adds at most ten
 high-ranked channels. The fallback keeps activity sources at both campaign and

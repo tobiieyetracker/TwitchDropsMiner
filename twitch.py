@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 import sys
+from pathlib import Path
 from time import time
 from copy import deepcopy
 from itertools import chain
@@ -444,6 +445,11 @@ class _AuthState:
             for invalid_token_attempt in range(2):
                 cookie = jar.filter_cookies(client_info.CLIENT_URL)
                 if "auth-token" not in cookie:
+                    if getattr(self._twitch.settings, "check_campaigns", False):
+                        raise LoginException(
+                            "No saved login token is available. The read-only campaign "
+                            "check will not start a new login flow."
+                        )
                     self.access_token = await self._oauth_login()
                     if self._logged_in.is_set():
                         # Browser login already installed a WEB identity. Do not
@@ -460,6 +466,11 @@ class _AuthState:
                     headers={"Authorization": f"OAuth {self.access_token}"}
                 ) as response:
                     if response.status == 401:
+                        if getattr(self._twitch.settings, "check_campaigns", False):
+                            raise LoginException(
+                                "The saved login token is invalid. The read-only campaign "
+                                "check will not clear cookies or start a new login flow."
+                            )
                         # Invalid tokens may be replaced through normal device login.
                         logger.info("Restored session is invalid")
                         assert client_info.CLIENT_URL.host is not None
@@ -473,6 +484,13 @@ class _AuthState:
                 raise LoginException("Twitch could not validate the login token")
             if validate_response["client_id"] != client_info.CLIENT_ID:
                 if validate_response["client_id"] == ClientType.WEB.CLIENT_ID:
+                    if getattr(self._twitch.settings, "check_campaigns", False):
+                        self._delattrs("access_token", "user_id")
+                        raise LoginException(
+                            "The saved login token belongs to WEB, but this read-only "
+                            "check requires the selected client identity. No browser "
+                            "login was started."
+                        )
                     # A saved web token belongs to the browser flow; keep it untouched
                     # and let the user reopen a fresh web session in Chrome.
                     self._delattrs("access_token", "user_id")
@@ -493,7 +511,8 @@ class _AuthState:
             login_form.update(_("gui", "login", "logged_in"), self.user_id)
             # update our cookie and save it
             jar.update_cookies(cookie, client_info.CLIENT_URL)
-            jar.save(self._twitch.cookie_path)
+            if not getattr(self._twitch.settings, "check_campaigns", False):
+                jar.save(self._twitch.cookie_path)
         self._twitch.gui.help._invalidate_button.config(state="normal")
         self._logged_in.set()
 
@@ -518,8 +537,12 @@ class Twitch:
             if getattr(settings, "smartbox_auth", False) else ClientType.ANDROID_APP
         )
         self._cookie_path = (
-            COOKIES_PATH.with_name("cookies.smartbox.jar")
-            if self._client_type is ClientType.SMARTBOX else COOKIES_PATH
+            Path(getattr(settings, "cookie_file")).expanduser()
+            if getattr(settings, "cookie_file", None)
+            else (
+                COOKIES_PATH.with_name("cookies.smartbox.jar")
+                if self._client_type is ClientType.SMARTBOX else COOKIES_PATH
+            )
         )
         self._web_session: TwitchWebSession | None = None
         if getattr(settings, "browser_auth", False):
@@ -599,7 +622,11 @@ class Twitch:
                     del cookie_jar._cookies[cookie_key]
             # Failed authentication must not overwrite the saved login during
             # cleanup, even if a page response changed the in-memory cookie jar.
-            if self._web_session is None and self._auth_state._logged_in.is_set():
+            if (
+                self._web_session is None
+                and self._auth_state._logged_in.is_set()
+                and not getattr(self.settings, "check_campaigns", False)
+            ):
                 cookie_jar.save(self.cookie_path)
             await self._session.close()
             self._session = None

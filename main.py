@@ -72,6 +72,7 @@ if __name__ == "__main__":
         browser_channel: str | None
         check_campaigns: bool
         smartbox_auth: bool
+        cookie_file: str | None
         campaign_game: list[str]
         campaign_channel: list[str]
 
@@ -135,6 +136,13 @@ if __name__ == "__main__":
         help="Use Twitch for TV device login and its matching SMARTBOX request identity",
     )
     parser.add_argument(
+        "--cookie-file", default=None, metavar="PATH",
+        help=(
+            "Use an existing cookie jar for --check-campaigns only; the check will not "
+            "save or replace this file, or start a new login flow."
+        ),
+    )
+    parser.add_argument(
         "--campaign-game", action="append", default=[], metavar="GAME",
         help=(
             "Game name to scan through live-channel AvailableDrops when the dashboard "
@@ -156,6 +164,10 @@ if __name__ == "__main__":
         "--debug-gql", dest="_debug_gql", action="store_true", help=argparse.SUPPRESS
     )
     args = parser.parse_args(namespace=ParsedArgs())
+    if args.cookie_file and not args.check_campaigns:
+        parser.error("--cookie-file can only be used with --check-campaigns")
+    if args.cookie_file and args.browser_auth:
+        parser.error("--cookie-file cannot be combined with --browser-auth")
     # load settings
     try:
         settings = Settings(args)
