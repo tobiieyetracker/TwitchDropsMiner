@@ -1,0 +1,112 @@
+{
+  "state": "passed",
+  "baseline": {
+    "dashboard_total": 160,
+    "in_progress": 0,
+    "applicable_with_game": 124,
+    "miner_campaigns": 124,
+    "new_campaigns_in_miner": 124,
+    "details_checked": 124,
+    "linked": 17,
+    "not_linked": 107,
+    "sample": [
+      {
+        "id": "98b3e674-8b93-48f3-93db-ec293d595835",
+        "name": "Rust Isles DB",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "32c93a64-ad3e-4d91-ac1a-6bd0ed82d062",
+        "name": "Rust Isles Sword",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "d251f62f-8e9b-469b-9b97-60064ff411ad",
+        "name": "Rust Isles Boonie",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "fbd182c6-2414-4355-858b-b61413b994cb",
+        "name": "Rust Isles Tac Gloves",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "b546584d-af17-4413-acbc-9e082ad2d6ea",
+        "name": "Rust Isles Wood Door",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      }
+    ]
+  },
+  "after_challenge": {
+    "dashboard_total": 160,
+    "in_progress": 0,
+    "applicable_with_game": 124,
+    "miner_campaigns": 124,
+    "new_campaigns_in_miner": 124,
+    "details_checked": 124,
+    "linked": 17,
+    "not_linked": 107,
+    "sample": [
+      {
+        "id": "98b3e674-8b93-48f3-93db-ec293d595835",
+        "name": "Rust Isles DB",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "32c93a64-ad3e-4d91-ac1a-6bd0ed82d062",
+        "name": "Rust Isles Sword",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "d251f62f-8e9b-469b-9b97-60064ff411ad",
+        "name": "Rust Isles Boonie",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "fbd182c6-2414-4355-858b-b61413b994cb",
+        "name": "Rust Isles Tac Gloves",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      },
+      {
+        "id": "b546584d-af17-4413-acbc-9e082ad2d6ea",
+        "name": "Rust Isles Wood Door",
+        "game": "Rust",
+        "linked": true,
+        "drops": 1
+      }
+    ]
+  },
+  "validated_at_utc": "2026-09-30T07:34:29.091508+00:00",
+  "source_sha256": {
+    "twitch.py": "9ca9625c830880148f36ac3b776b55f14faec8b6f334815d21860b3f0a029518",
+    "web_session.py": "63c8f52388ca34384b345a6d815b6abbca9eac7ee94102823647485c9db06196",
+    "gql_recovery.py": "7d595a8379a6d3f33f66f3ff77a27915ae680d70914b79bcc9d9e96bfa702944"
+  },
+  "real_challenges": 1,
+  "integrity_fetches": 3,
+  "expiry_branch_forced": true,
+  "network_operations": {
+    "Inventory": 2,
+    "ViewerDropsDashboard": 5,
+    "DropCampaignDetails": 248
+  },
+  "gui": "inventory sink only; no Tk rendering or isolated browser startup tested"
+}

@@ -6,6 +6,13 @@ using an authorized Codex in-app browser session. The standalone Playwright/Edge
 sign-in flow did not complete: the user reported being unable to sign in. This
 is not yet a verified end-to-end fix for the normal application startup flow.
 
+For the next Linux run, follow [the Muse validation handoff](LINUX_VALIDATION.md).
+The later [SMARTBOX / ANDROID_APP comparison](docs/campaign-discovery/twitch-android-campaign-validation.md)
+still returned null with SMARTBOX-issued OAuth, including with fresh integrity.
+WEB-issued OAuth plus matching web identity and integrity returned campaigns with
+ANDROID_APP. The candidate browser mode uses the captured WEB client identity;
+it does not implement a SMARTBOX fix or switch the web session to ANDROID_APP.
+
 ## What changed on Twitch
 
 The public web bundles retrieved on 2026-09-30 still use `ViewerDropsDashboard`
@@ -104,11 +111,12 @@ replaced by fixtures. The adapter did not start or attach to any other browser.
   natural-expiry test. The run made 2 Inventory, 5 dashboard and 248 detail
   operations, and no watch/claim requests.
 
-Local investigation artifacts, outside the nested repository:
-`../twitch_live_check.py` and `../twitch-live-check-result.json`. The report contains
-counts and public campaign examples, not OAuth, cookies, integrity tokens or user
-IDs. The temporary local broker was closed after verification. It is a diagnostic
-adapter, not a supported Codex sign-in option shipped with the miner.
+The [sanitized live result](docs/campaign-discovery/twitch-live-check-result.json)
+contains counts and public campaign examples, not OAuth, cookies, integrity tokens
+or user IDs. Its `state: passed` refers to the transport/adapter test described
+above, not a completed standalone or Linux validation. The temporary local broker
+was closed after verification. That diagnostic adapter is not distributed or a
+supported Codex sign-in option shipped with the miner.
 
 Run `python -m pytest -q tests` for the offline suite (40 passed). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory

@@ -1,0 +1,77 @@
+{
+  "validated_at_utc": "2026-09-30T07:50:24.774281+00:00",
+  "http_client": "Python aiohttp on Windows; Linux runtime not tested",
+  "smartbox_issuer_verified": true,
+  "same_account": true,
+  "cases": [
+    {
+      "case": "smartbox_oauth_android_inventory",
+      "http_status": 200,
+      "operation": "Inventory",
+      "hash": "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
+      "user_present": true,
+      "errors": [],
+      "challenge": null,
+      "in_progress": null
+    },
+    {
+      "case": "smartbox_oauth_android_current_dashboard",
+      "http_status": 200,
+      "operation": "ViewerDropsDashboard",
+      "hash": "69750554e0a81492f2d343558f84bdf3e324767650a2dbb6e79a3c629b4548cf",
+      "user_present": true,
+      "errors": [],
+      "challenge": null,
+      "campaigns": null
+    },
+    {
+      "case": "smartbox_oauth_android_issued_integrity",
+      "http_status": 200,
+      "operation": "ViewerDropsDashboard",
+      "hash": "69750554e0a81492f2d343558f84bdf3e324767650a2dbb6e79a3c629b4548cf",
+      "user_present": true,
+      "errors": [],
+      "challenge": null,
+      "campaigns": null
+    },
+    {
+      "case": "web_oauth_android_full_identity_current",
+      "http_status": 200,
+      "operation": "ViewerDropsDashboard",
+      "hash": "69750554e0a81492f2d343558f84bdf3e324767650a2dbb6e79a3c629b4548cf",
+      "user_present": true,
+      "errors": [],
+      "challenge": null,
+      "campaigns": 160
+    },
+    {
+      "case": "web_oauth_android_full_identity_old",
+      "http_status": 200,
+      "operation": "ViewerDropsDashboard",
+      "hash": "c16bb890cc8ce7647a96ee69cd313d423a378a3dedadf630a1017cde18975feb",
+      "user_present": true,
+      "errors": [],
+      "challenge": null,
+      "campaigns": 160
+    },
+    {
+      "case": "web_oauth_android_full_identity_details",
+      "http_status": 200,
+      "operation": "DropCampaignDetails",
+      "hash": "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
+      "user_present": false,
+      "errors": [],
+      "challenge": null,
+      "detail_present": true,
+      "detail_name": "September 2026 Drops",
+      "linked": false,
+      "drop_minutes": [
+        15,
+        30,
+        60,
+        90,
+        120
+      ]
+    }
+  ]
+}

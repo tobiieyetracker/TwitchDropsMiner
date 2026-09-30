@@ -1,0 +1,12 @@
+{
+  "operationName": "ViewerDropsDashboard",
+  "variables": {
+    "fetchRewardCampaigns": false
+  },
+  "extensions": {
+    "persistedQuery": {
+      "version": 1,
+      "sha256Hash": "69750554e0a81492f2d343558f84bdf3e324767650a2dbb6e79a3c629b4548cf"
+    }
+  }
+}
