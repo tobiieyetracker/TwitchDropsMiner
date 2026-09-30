@@ -16,6 +16,23 @@ use the platform upstream already known to work, while Chromium uses the relay
 to that same upstream. This removes an unnecessary Python relay dependency;
 it does not establish why the first connection failed or change the egress.
 
+Second Muse run, `21f8188`: all 241 focused tests passed, and
+`separate_python_proxy:true` confirmed the transport change. Python's identity
+GET still failed with `ClientConnectionError` before any sent-header trace,
+browser launch or claim. No native journal was created; old state was unchanged
+and cleanup completed. Report: `native-claim-21f8188-20260930-2350.json`.
+The split therefore did not resolve the connection failure.
+
+Muse's runtime is Python 3.12.3 / aiohttp 3.14.3 / truststore 0.10.4. Unlike the
+earlier successful finish-drop entry point, the native entry point enables
+truststore after imports. Python reads now receive a freshly constructed,
+verified SSL context, as the successful campaign-auth probe already did, rather
+than relying on aiohttp's import-time cached context. Certificate and hostname
+validation remain enabled. This is a targeted initialization correction, not
+yet a proven explanation. If a request still fails, `request_failure` records
+only exception types and basename/function/line locations, without exception
+messages, locals, full paths, URLs or credentials. There are no retries.
+
 The previous Python attempts had no accepted integrity context. The latest
 source-derived hash returned an explicit integrity challenge. Changing a hash
 again does not address that result. The official inventory page has its own

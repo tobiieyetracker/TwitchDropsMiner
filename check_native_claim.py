@@ -12,7 +12,9 @@ import json
 import logging
 import os
 import re
+import ssl
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,6 +50,27 @@ def safe_error(error):
     return type(error).__name__
 
 
+def connection_diagnostic(error):
+    """Bounded exception types and source locations; never messages or locals."""
+    result, seen = [], set()
+    while error is not None and id(error) not in seen and len(result) < 4:
+        seen.add(id(error))
+        frames, trace = [], error.__traceback__
+        while trace is not None:
+            code = trace.tb_frame.f_code
+            filename = Path(code.co_filename).name
+            function = code.co_name
+            frames.append({
+                "file": filename if re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", filename) else "unknown",
+                "function": function if re.fullmatch(r"[A-Za-z0-9_<>]{1,80}", function) else "unknown",
+                "line": trace.tb_lineno,
+            })
+            trace = trace.tb_next
+        result.append({"type": type(error).__name__, "frames": frames[-6:]})
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return result
+
+
 def operations_in(request):
     value = request.post_data_json
     operations = value if isinstance(value, list) else [value]
@@ -79,6 +102,19 @@ class InventoryClient(FinishClient):
     def __init__(self, report, proxy, clock, deadline):
         super().__init__(report, proxy, clock, deadline, reconcile_only=True)
         self.request_limit = MAX_PYTHON_REQUESTS
+        # Build after main enables system trust, matching the already-working
+        # campaign probe. aiohttp's import-time context may predate that change.
+        self._tls_context = ssl.create_default_context()
+
+    @asynccontextmanager
+    async def request(self, method, url, **kwargs):
+        kwargs["ssl"] = self._tls_context
+        try:
+            async with super().request(method, url, **kwargs) as response:
+                yield response
+        except Exception as error:
+            self.report["request_failure"] = connection_diagnostic(error)
+            raise
 
 
 class NativeCapture(BrowserCapture):

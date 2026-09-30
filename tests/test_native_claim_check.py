@@ -1,6 +1,7 @@
 """Offline boundary tests: real journal/Python reads, simulated website transport."""
 import asyncio
 import json
+import ssl
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -157,7 +158,7 @@ class Website:
 
 
 def scenario(monkeypatch, tmp_path, *, behavior="success", previous=False, claimed=False,
-             browser_proxy=None, python_proxy=None):
+             browser_proxy=None, python_proxy=None, connection_error=None):
     async def run():
         real_sleep = asyncio.sleep
 
@@ -197,7 +198,30 @@ def scenario(monkeypatch, tmp_path, *, behavior="success", previous=False, claim
 
         network.inventory = inventory
         site = Website(network, state_dir, behavior)
-        monkeypatch.setattr(aiohttp, "ClientSession", network.session)
+        network.tls_contexts = []
+        base_session = network.session
+
+        def session(**options):
+            result = base_session(**options)
+            base_request = result.request
+
+            @asynccontextmanager
+            async def request(method, url, **kwargs):
+                # Inspect the actual aiohttp boundary before passing through the
+                # older shared fixture, whose callers did not specify TLS.
+                context = kwargs.pop("ssl")
+                network.tls_contexts.append(context)
+                assert context.verify_mode == ssl.CERT_REQUIRED
+                assert context.check_hostname is True
+                if connection_error is not None:
+                    raise connection_error
+                async with base_request(method, url, **kwargs) as response:
+                    yield response
+
+            result.request = request
+            return result
+
+        monkeypatch.setattr(aiohttp, "ClientSession", session)
         import playwright.async_api
 
         @asynccontextmanager
@@ -415,3 +439,50 @@ def test_missing_python_proxy_environment_stops_before_network(monkeypatch, tmp_
     }
     check.assert_not_called()
     sessions.assert_not_called()
+
+
+def test_requests_use_fresh_verified_ssl_context(monkeypatch, tmp_path):
+    real_context = ssl.create_default_context
+    created = []
+
+    def make_context():
+        context = real_context()
+        created.append(context)
+        return context
+
+    monkeypatch.setattr(native.ssl, "create_default_context", make_context)
+    code, report, site, network, record = scenario(monkeypatch, tmp_path)
+    assert code == 0 and len(created) == 1
+    assert len(network.tls_contexts) == len(network.calls) > 1
+    assert all(context is created[0] for context in network.tls_contexts)
+    assert created[0].verify_mode == ssl.CERT_REQUIRED and created[0].check_hostname is True
+    assert "request_failure" not in report
+
+
+def test_connection_chain_is_redacted_and_never_retried(monkeypatch, tmp_path):
+    private = "fixture-password-should-never-appear-in-diagnostics"
+    try:
+        try:
+            raise ssl.SSLCertVerificationError(f"https://private.proxy.invalid/{private}")
+        except ssl.SSLCertVerificationError as cause:
+            raise aiohttp.ClientConnectionError(f"OAuth {TOKEN} {private}") from cause
+    except aiohttp.ClientConnectionError as error:
+        connection_error = error
+
+    code, report, site, network, record = scenario(monkeypatch, tmp_path, connection_error=connection_error)
+    assert code == 1 and report["error"] == "ClientConnectionError"
+    assert len(network.tls_contexts) == 1 and not network.calls
+    assert site.capture is None and not site.wire and record is None
+    assert len(report["requests"]) == 1 and report["requests"][0]["http_status"] is None
+    diagnostic = report["request_failure"]
+    assert [item["type"] for item in diagnostic] == ["ClientConnectionError", "SSLCertVerificationError"]
+    assert all(0 < len(item["frames"]) <= 6 for item in diagnostic)
+    assert any(frame["file"] == "test_native_claim_check.py" for item in diagnostic for frame in item["frames"])
+    for item in diagnostic:
+        assert set(item) == {"type", "frames"}
+        for frame in item["frames"]:
+            assert set(frame) == {"file", "function", "line"}
+            assert "/" not in frame["file"] and "\\" not in frame["file"]
+            assert isinstance(frame["line"], int) and frame["line"] > 0
+    output = json.dumps(report)
+    assert all(secret not in output for secret in (TOKEN, private, "private.proxy.invalid", str(tmp_path)))
