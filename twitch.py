@@ -1640,6 +1640,18 @@ class Twitch:
         availability_client: Any | None = None,
     ) -> tuple[dict[str, JsonType], int, int]:
         """Discover partial candidates via configured games and exact channels."""
+        scan_stats = {
+            "channel_lists_nonempty": 0,
+            "channel_lists_empty": 0,
+            "channel_lists_unknown": 0,
+            "raw_campaign_entries": 0,
+            "candidate_entries": 0,
+            "malformed_campaign_entries": 0,
+            "missing_game_entries": 0,
+            "invalid_campaign_entries": 0,
+            "inactive_campaign_entries": 0,
+        }
+        self._campaign_discovery_stats = scan_stats
         channels_by_id: dict[int, Channel] = {}
         # Exact channels are useful when an event is tied to one broadcaster or
         # the target streamer is outside the game's top directory results.
@@ -1695,6 +1707,7 @@ class Twitch:
                 # candidates already read from other channels. Integrity or
                 # interactive challenges still stop the scan.
                 unavailable_channels += 1
+                scan_stats["channel_lists_unknown"] += 1
                 continue
 
             channel_data = (response.get("data") or {}).get("channel")
@@ -1707,6 +1720,11 @@ class Twitch:
                     "Twitch returned an unexpected channel during campaign discovery."
                 )
             campaigns = channel_data["viewerDropCampaigns"]
+            if campaigns:
+                scan_stats["channel_lists_nonempty"] += 1
+            else:
+                scan_stats["channel_lists_empty"] += 1
+            scan_stats["raw_campaign_entries"] += len(campaigns)
             game = channel.game
             game_data = (
                 {"id": str(game.id), "name": game.name, "displayName": game.name}
@@ -1717,9 +1735,11 @@ class Twitch:
             )
             for raw_campaign in campaigns:
                 if not isinstance(raw_campaign, dict):
+                    scan_stats["malformed_campaign_entries"] += 1
                     continue
                 candidate_game = game_data or raw_campaign.get("game")
                 if not isinstance(candidate_game, dict):
+                    scan_stats["missing_game_entries"] += 1
                     continue
                 candidate = normalize_available_campaign(
                     raw_campaign,
@@ -1728,8 +1748,13 @@ class Twitch:
                     game=candidate_game,
                     observed_at=observed_at,
                 )
-                if candidate is None or candidate["status"] not in ("ACTIVE", "UPCOMING"):
+                if candidate is None:
+                    scan_stats["invalid_campaign_entries"] += 1
                     continue
+                if candidate["status"] not in ("ACTIVE", "UPCOMING"):
+                    scan_stats["inactive_campaign_entries"] += 1
+                    continue
+                scan_stats["candidate_entries"] += 1
                 campaign_id = candidate["id"]
                 if campaign_id in candidates:
                     candidates[campaign_id] = merge_channel_campaign(
@@ -2000,6 +2025,20 @@ class Twitch:
                 f"{len(new_ids)} newly discovered. Account links: {linked} connected, "
                 f"{unlinked} not connected, {unknown_link} unknown."
             )
+            if attempted_channels:
+                scan_stats = getattr(self, "_campaign_discovery_stats", {})
+                self.print(
+                    "AvailableDrops results: "
+                    f"{scan_stats.get('channel_lists_nonempty', 0)} non-empty, "
+                    f"{scan_stats.get('channel_lists_empty', 0)} empty, "
+                    f"{scan_stats.get('channel_lists_unknown', unavailable_channels)} unknown; "
+                    f"{scan_stats.get('raw_campaign_entries', 0)} raw campaign entries, "
+                    f"{scan_stats.get('candidate_entries', 0)} active/upcoming candidates, "
+                    f"{scan_stats.get('malformed_campaign_entries', 0)} malformed and "
+                    f"{scan_stats.get('missing_game_entries', 0)} missing-game entries, "
+                    f"{scan_stats.get('invalid_campaign_entries', 0)} invalid, "
+                    f"{scan_stats.get('inactive_campaign_entries', 0)} inactive/expired."
+                )
         else:
             self._mnt_task = asyncio.create_task(self._maintenance_task())
 

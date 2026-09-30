@@ -47,6 +47,17 @@ rate limits stop the scan. `--campaign-check-exit` closes the diagnostic window
 after the check and skips saving application settings; without it the window
 remains available for inspection.
 
+Some `AvailableDrops` payloads omit campaign-level `startAt` while a drop has a
+complete, ordered time window. The miner derives only the missing campaign
+bound from valid drop windows (minimum drop start and/or maximum drop end), and
+marks the source in `_discovery.derived_campaign_window`. Drops without an
+actual value for a missing campaign bound are excluded; if no ordered campaign
+window can be established, the candidate remains rejected. This derived
+interval is for scheduling and status display, not a claim that Twitch returned
+those campaign-level fields. Read-only check output also reports non-empty,
+empty, and unknown `AvailableDrops` results separately, plus candidate IDs and
+drops.
+
 For a normal SMARTBOX run, pass the WEB jar explicitly when it is available:
 
 ```bash

@@ -40,8 +40,6 @@ def normalize_available_campaign(
     if not (
         isinstance(campaign_id, str) and campaign_id
         and isinstance(name, str) and name
-        and starts_at is not None
-        and ends_at is not None
         and isinstance(drops, list)
         and isinstance(game, dict)
     ):
@@ -56,6 +54,66 @@ def normalize_available_campaign(
     if not merged_game.get("id") or not (merged_game.get("name") or merged_game.get("displayName")):
         return None
     merged_game["boxArtURL"] = merged_game.get("boxArtURL") or ""
+
+    # Campaign-level bounds are absent from some AvailableDrops responses.
+    # Build drops first so a missing campaign bound can be derived only from
+    # actual, valid drop windows. Never substitute an arbitrary date.
+    valid_drops: list[tuple[Json, str | None, str | None]] = []
+    for raw_drop in drops:
+        if not isinstance(raw_drop, dict):
+            continue
+        drop_id = raw_drop.get("id")
+        drop_name = raw_drop.get("name")
+        minutes = raw_drop.get("requiredMinutesWatched")
+        edges = raw_drop.get("benefitEdges")
+        if (
+            not isinstance(drop_id, str) or not drop_id
+            or not isinstance(drop_name, str) or not drop_name
+            or not isinstance(minutes, int)
+            or not isinstance(edges, list)
+        ):
+            continue
+        drop = deepcopy(raw_drop)
+        drop_start = _normalize_time(drop.get("startAt"))
+        drop_end = _normalize_time(drop.get("endAt"))
+        # If a campaign bound is missing, a drop with no corresponding bound
+        # cannot safely inherit the value derived from another drop.
+        if (starts_at is None and drop_start is None) or (ends_at is None and drop_end is None):
+            continue
+        effective_start = drop_start or starts_at
+        effective_end = drop_end or ends_at
+        if effective_start is None or effective_end is None or not _valid_window(
+            effective_start, effective_end
+        ):
+            continue
+        drop["startAt"] = effective_start
+        drop["endAt"] = effective_end
+        drop.setdefault("preconditionDrops", [])
+        if not isinstance(drop.get("self"), dict):
+            drop.pop("self", None)
+        else:
+            drop["self"].setdefault("dropInstanceID", None)
+            drop["self"].setdefault("isClaimed", False)
+            drop["self"].setdefault("currentMinutesWatched", 0)
+        # Some AvailableDrops selections omit this optional field. Unknown is
+        # preserved as UNKNOWN instead of treating the reward as a badge.
+        for edge in drop["benefitEdges"]:
+            if isinstance(edge, dict) and isinstance(edge.get("benefit"), dict):
+                edge["benefit"].setdefault("distributionType", "UNKNOWN")
+                edge["benefit"].setdefault("imageAssetURL", "")
+        valid_drops.append((drop, drop_start, drop_end))
+    if not valid_drops:
+        return None
+
+    derived_bounds: dict[str, str] = {}
+    if starts_at is None:
+        starts_at = min(drop_start for _, drop_start, _ in valid_drops if drop_start is not None)
+        derived_bounds["startAt"] = "min(timeBasedDrops[].startAt)"
+    if ends_at is None:
+        ends_at = max(drop_end for _, _, drop_end in valid_drops if drop_end is not None)
+        derived_bounds["endAt"] = "max(timeBasedDrops[].endAt)"
+    if not _valid_window(starts_at, ends_at):
+        return None
 
     campaign = deepcopy(raw)
     campaign["game"] = merged_game
@@ -75,51 +133,32 @@ def normalize_available_campaign(
     else:
         campaign["status"] = campaign["status"].upper()
 
-    valid_drops: list[Json] = []
-    for raw_drop in drops:
-        if not isinstance(raw_drop, dict):
-            continue
-        drop_id = raw_drop.get("id")
-        drop_name = raw_drop.get("name")
-        minutes = raw_drop.get("requiredMinutesWatched")
-        edges = raw_drop.get("benefitEdges")
-        if (
-            not isinstance(drop_id, str) or not drop_id
-            or not isinstance(drop_name, str) or not drop_name
-            or not isinstance(minutes, int)
-            or not isinstance(edges, list)
-        ):
-            continue
-        drop = deepcopy(raw_drop)
-        drop["startAt"] = _normalize_time(drop.get("startAt")) or starts_at
-        drop["endAt"] = _normalize_time(drop.get("endAt")) or ends_at
-        drop.setdefault("preconditionDrops", [])
-        if not isinstance(drop.get("self"), dict):
-            drop.pop("self", None)
-        else:
-            drop["self"].setdefault("dropInstanceID", None)
-            drop["self"].setdefault("isClaimed", False)
-            drop["self"].setdefault("currentMinutesWatched", 0)
-        # Some AvailableDrops selections omit this optional field. Unknown is
-        # preserved as UNKNOWN instead of treating the reward as a badge.
-        for edge in drop["benefitEdges"]:
-            if isinstance(edge, dict) and isinstance(edge.get("benefit"), dict):
-                edge["benefit"].setdefault("distributionType", "UNKNOWN")
-                edge["benefit"].setdefault("imageAssetURL", "")
-        valid_drops.append(drop)
-    if not valid_drops:
+    normalized_drops: list[Json] = []
+    for drop, drop_start, drop_end in valid_drops:
+        # A bound already present on a drop stays authoritative. The fallback
+        # is used only when the campaign supplied that bound.
+        drop["startAt"] = drop_start or starts_at
+        drop["endAt"] = drop_end or ends_at
+        normalized_drops.append(drop)
+    if not normalized_drops:
         return None
-    campaign["timeBasedDrops"] = valid_drops
-    campaign["_discovery"] = {
+    campaign["timeBasedDrops"] = normalized_drops
+    discovery = {
         "source": "DropsHighlightService_AvailableDrops",
         "sources": [_source(channel_id, channel_login, observed_at)],
         "drop_sources": {
             drop["id"]: [_source(channel_id, channel_login, observed_at)]
-            for drop in valid_drops
+            for drop in normalized_drops
         },
         "conflicts": [],
         "coverage": "partial_channel_scan",
     }
+    if derived_bounds:
+        discovery["derived_campaign_window"] = {
+            "source": "timeBasedDrops",
+            "bounds": derived_bounds,
+        }
+    campaign["_discovery"] = discovery
     return campaign
 
 
@@ -220,6 +259,15 @@ def _window_status(starts_at: str, ends_at: str) -> str:
     if now >= end:
         return "EXPIRED"
     return "ACTIVE"
+
+
+def _valid_window(starts_at: str, ends_at: str) -> bool:
+    try:
+        start = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(ends_at.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return start.tzinfo is not None and end.tzinfo is not None and start < end
 
 
 def _normalize_time(value: Any) -> str | None:

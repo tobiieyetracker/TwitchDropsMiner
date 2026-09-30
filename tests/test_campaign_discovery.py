@@ -71,6 +71,67 @@ def test_candidate_keeps_unknown_account_state_and_channel_provenance():
     assert item["timeBasedDrops"][0]["benefitEdges"][0]["benefit"]["distributionType"] == "UNKNOWN"
 
 
+def test_missing_campaign_start_is_derived_from_a_valid_drop_window_and_marked():
+    raw = campaign("drop-a")
+    raw.pop("startAt")
+    raw["timeBasedDrops"][0].update({
+        "startAt": "2026-09-23T14:00:00Z",
+        "endAt": "2026-10-13T13:59:59.999Z",
+    })
+    raw["endAt"] = "2026-10-13T13:59:59.999Z"
+
+    item = normalize(raw, 11, "streamer_a")
+
+    assert item["startAt"] == "2026-09-23T14:00:00.000Z"
+    assert item["endAt"] == "2026-10-13T13:59:59.999Z"
+    assert item["timeBasedDrops"][0]["startAt"] == item["startAt"]
+    assert item["timeBasedDrops"][0]["endAt"] == item["endAt"]
+    assert item["_discovery"]["derived_campaign_window"] == {
+        "source": "timeBasedDrops",
+        "bounds": {"startAt": "min(timeBasedDrops[].startAt)"},
+    }
+
+
+def test_both_campaign_bounds_can_be_derived_only_from_valid_drop_windows():
+    raw = campaign("drop-a")
+    raw.pop("startAt")
+    raw.pop("endAt")
+    raw["timeBasedDrops"][0].update({
+        "startAt": "2026-09-23T14:00:00Z",
+        "endAt": "2026-10-13T13:59:59.999Z",
+    })
+
+    item = normalize(raw, 11, "streamer_a")
+
+    assert item is not None
+    assert item["_discovery"]["derived_campaign_window"] == {
+        "source": "timeBasedDrops",
+        "bounds": {
+            "startAt": "min(timeBasedDrops[].startAt)",
+            "endAt": "max(timeBasedDrops[].endAt)",
+        },
+    }
+
+
+def test_missing_campaign_bound_without_drop_bound_remains_unknown():
+    raw = campaign("drop-a")
+    raw.pop("startAt")
+    raw["timeBasedDrops"][0].pop("startAt", None)
+
+    assert normalize(raw, 11, "streamer_a") is None
+
+
+def test_invalid_or_unordered_drop_window_is_not_used_for_derivation():
+    raw = campaign("drop-a")
+    raw.pop("startAt")
+    raw["timeBasedDrops"][0].update({
+        "startAt": "2026-10-13T14:00:00Z",
+        "endAt": "2026-09-23T14:00:00Z",
+    })
+
+    assert normalize(raw, 11, "streamer_a") is None
+
+
 def test_same_campaign_merges_drops_by_drop_id_and_preserves_conflicts():
     first = normalize(campaign("drop-a", drop_name="Reward A"), 11, "streamer_a")
     second = normalize(campaign("drop-b"), 22, "streamer_b")
@@ -176,6 +237,17 @@ def test_channel_first_reader_queries_configured_game_and_keeps_per_drop_sources
     )
     assert attempted == 2
     assert unavailable == 0
+    assert client._campaign_discovery_stats == {
+        "channel_lists_nonempty": 2,
+        "channel_lists_empty": 0,
+        "channel_lists_unknown": 0,
+        "raw_campaign_entries": 2,
+        "candidate_entries": 2,
+        "malformed_campaign_entries": 0,
+        "missing_game_entries": 0,
+        "invalid_campaign_entries": 0,
+        "inactive_campaign_entries": 0,
+    }
     assert list(candidates) == ["campaign-1"]
     merged = candidates["campaign-1"]
     assert {drop["id"] for drop in merged["timeBasedDrops"]} == {"drop-a", "drop-b"}
@@ -213,6 +285,8 @@ def test_exact_channel_scan_resolves_rainbow6_even_when_not_in_directory():
 
     assert attempted == 1
     assert unavailable == 0
+    assert client._campaign_discovery_stats["channel_lists_nonempty"] == 1
+    assert client._campaign_discovery_stats["candidate_entries"] == 1
     assert candidates["campaign-1"]["_discovery"]["sources"][0]["channel_login"] == "rainbow6"
     operations = [
         call.args[0][0] if isinstance(call.args[0], list) else call.args[0]
@@ -222,6 +296,54 @@ def test_exact_channel_scan_resolves_rainbow6_even_when_not_in_directory():
         "VideoPlayerStreamInfoOverlayChannel",
         "DropsHighlightService_AvailableDrops",
     ]
+
+
+def test_exact_channel_scan_reports_empty_list_separately_from_invalid_campaign():
+    responses = [
+        [{"data": {"user": {
+            "id": "9001", "login": "rainbow6", "displayName": "Rainbow Six",
+            "stream": None,
+        }}}],
+        {"data": {"channel": {"id": "9001", "viewerDropCampaigns": []}}},
+    ]
+    empty_client = Twitch.__new__(Twitch)
+    empty_client.gui = SimpleNamespace(channels=SimpleNamespace())
+    empty_client.gql_request = AsyncMock(side_effect=responses)
+
+    empty_candidates, attempted, unavailable = asyncio.run(
+        empty_client._discover_campaigns_from_channels([], ["rainbow6"])
+    )
+
+    assert empty_candidates == {}
+    assert (attempted, unavailable) == (1, 0)
+    assert empty_client._campaign_discovery_stats["channel_lists_empty"] == 1
+    assert empty_client._campaign_discovery_stats["raw_campaign_entries"] == 0
+
+    invalid = campaign("drop-without-window")
+    invalid.pop("startAt")
+    invalid.pop("endAt")
+    # Keep the entry structurally valid but remove every usable source window.
+    invalid["timeBasedDrops"][0].pop("startAt", None)
+    invalid["timeBasedDrops"][0].pop("endAt", None)
+    invalid_client = Twitch.__new__(Twitch)
+    invalid_client.gui = SimpleNamespace(channels=SimpleNamespace())
+    invalid_client.gql_request = AsyncMock(side_effect=[
+        [{"data": {"user": {
+            "id": "9001", "login": "rainbow6", "displayName": "Rainbow Six",
+            "stream": None,
+        }}}],
+        {"data": {"channel": {"id": "9001", "viewerDropCampaigns": [invalid]}}},
+    ])
+
+    invalid_candidates, attempted, unavailable = asyncio.run(
+        invalid_client._discover_campaigns_from_channels([], ["rainbow6"])
+    )
+
+    assert invalid_candidates == {}
+    assert (attempted, unavailable) == (1, 0)
+    assert invalid_client._campaign_discovery_stats["channel_lists_nonempty"] == 1
+    assert invalid_client._campaign_discovery_stats["raw_campaign_entries"] == 1
+    assert invalid_client._campaign_discovery_stats["invalid_campaign_entries"] == 1
 
 
 def test_game_directory_null_game_returns_no_channels_without_aborting_scan():
