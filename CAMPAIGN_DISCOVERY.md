@@ -80,6 +80,10 @@ The default app/device authentication remains available without `--browser-auth`
 If Twitch rejects that client or its campaign queries, the error now points to
 the web session option instead of showing `KeyError: device_code` or an empty
 campaign list.
+If a valid saved token belongs to a different client, authentication stops with
+an explicit error and preserves `cookies.jar`, including during shutdown. It
+does not replace that token by starting a device login. This protects imported
+WEB credentials; it does not import them into the browser or provide integrity.
 
 ## Recovery and limits
 
@@ -133,8 +137,8 @@ above, not a completed standalone or Linux validation. The temporary local broke
 was closed after verification. That diagnostic adapter is not distributed or a
 supported Codex sign-in option shipped with the miner.
 
-Run `python -m pytest -q tests` for the offline suite (56 passed after adding proxy
-regressions and the anonymous connectivity probe). Remaining:
+Run `python -m pytest -q tests` for the offline suite (63 passed, including cookie
+preservation through failed authentication and shutdown). Remaining:
 complete a supported standalone browser sign-in and verify the actual Tk inventory
 rendering, plus a longer run through natural token expiry. No root cause was
 established for the failed Edge sign-in; browser protections were not changed.

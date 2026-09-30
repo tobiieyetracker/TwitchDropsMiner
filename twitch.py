@@ -413,41 +413,42 @@ class _AuthState:
             login_form: LoginForm = self._twitch.gui.login
             logger.info("Checking login")
             login_form.update(_("gui", "login", "logging_in"), None)
-            for client_mismatch_attempt in range(2):
-                for invalid_token_attempt in range(2):
-                    cookie = jar.filter_cookies(client_info.CLIENT_URL)
-                    if "auth-token" not in cookie:
-                        self.access_token = await self._oauth_login()
-                        cookie["auth-token"] = self.access_token
-                    elif not hasattr(self, "access_token"):
-                        logger.info("Restoring session from cookie")
-                        self.access_token = cookie["auth-token"].value
-                    # validate the auth token, by obtaining user_id
-                    async with self._twitch.request(
-                        "GET",
-                        "https://id.twitch.tv/oauth2/validate",
-                        headers={"Authorization": f"OAuth {self.access_token}"}
-                    ) as response:
-                        if response.status == 401:
-                            # the access token we have is invalid - clear the cookie and reauth
-                            logger.info("Restored session is invalid")
-                            assert client_info.CLIENT_URL.host is not None
-                            jar.clear_domain(client_info.CLIENT_URL.host)
-                            continue
-                        elif response.status == 200:
-                            validate_response = await response.json()
-                            break
-                else:
-                    raise RuntimeError("Login verification failure (step #2)")
-                # ensure the cookie's client ID matches the currently selected client
-                if validate_response["client_id"] == client_info.CLIENT_ID:
-                    break
-                # otherwise, we need to delete the entire cookie file and clear the jar
-                logger.info("Cookie client ID mismatch")
-                jar.clear()
-                COOKIES_PATH.unlink(missing_ok=True)
+            for invalid_token_attempt in range(2):
+                cookie = jar.filter_cookies(client_info.CLIENT_URL)
+                if "auth-token" not in cookie:
+                    self.access_token = await self._oauth_login()
+                    cookie["auth-token"] = self.access_token
+                elif not hasattr(self, "access_token"):
+                    logger.info("Restoring session from cookie")
+                    self.access_token = cookie["auth-token"].value
+                # validate the auth token, by obtaining user_id
+                async with self._twitch.request(
+                    "GET",
+                    "https://id.twitch.tv/oauth2/validate",
+                    headers={"Authorization": f"OAuth {self.access_token}"}
+                ) as response:
+                    if response.status == 401:
+                        # Invalid tokens may be replaced through normal device login.
+                        logger.info("Restored session is invalid")
+                        assert client_info.CLIENT_URL.host is not None
+                        jar.clear_domain(client_info.CLIENT_URL.host)
+                        self._delattrs("access_token", "user_id")
+                        continue
+                    elif response.status == 200:
+                        validate_response = await response.json()
+                        break
             else:
-                raise RuntimeError("Login verification failure (step #1)")
+                raise LoginException("Twitch could not validate the login token")
+            if validate_response["client_id"] != client_info.CLIENT_ID:
+                # A valid token for another client is not an expired login. Do not
+                # discard it or silently replace it by starting a new device flow.
+                self._delattrs("access_token", "user_id")
+                raise LoginException(
+                    "The Twitch login token belongs to a different client. "
+                    "Existing cookies.jar has been preserved. "
+                    "--browser-auth requires its own browser sign-in; "
+                    "it does not import cookies.jar."
+                )
             self.user_id = int(validate_response["user_id"])
             cookie["persistent"] = str(self.user_id)
             logger.info(f"Login successful, user ID: {self.user_id}")
@@ -550,7 +551,9 @@ class Twitch:
             for cookie_key, cookie in list(cookie_jar._cookies.items()):
                 if not cookie:
                     del cookie_jar._cookies[cookie_key]
-            if self._web_session is None:
+            # Failed authentication must not overwrite the saved login during
+            # cleanup, even if a page response changed the in-memory cookie jar.
+            if self._web_session is None and self._auth_state._logged_in.is_set():
                 cookie_jar.save(COOKIES_PATH)
             await self._session.close()
             self._session = None

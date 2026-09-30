@@ -4,6 +4,10 @@
 自动领取。本文的只读检查是前期验证，不是最终交付范围。后续任务和最新阻塞见
 [CLOUD_OPERATION.md](CLOUD_OPERATION.md)，不要继续将“本次不观看、不领取”作为永久限制。
 
+最新进展：用户已授权并向 Muse 提供 WEB token；Muse 报告验证有效、已写入 Cookie。
+转发器路径能加载网页但活动查询仍被 integrity 拒绝，MITM/TLS 指纹原因尚未证实。
+先按 CLOUD_OPERATION.md 的当前步骤推进，以下交互登录步骤仅适用于有可用桌面的环境。
+
 请在用户实际运行矿机的 Linux 环境验证这份候选补丁，并根据真实失败修正。
 先读本文、[CAMPAIGN_DISCOVERY.md](CAMPAIGN_DISCOVERY.md) 和
 [客户端组合实测记录](docs/campaign-discovery/twitch-android-campaign-validation.md)，
@@ -16,7 +20,8 @@
 - 分支：`codex/campaign-discovery`，不是 `master`。
 - 上游起点：`22d0c6134f9291d1e904012c465504a22bd3f97c`。
 - 候选实现提交：`42f6409a45bebca82bf03e7299a994535dbc4482`。
-- 已有 40 项离线测试通过；Linux 运行尚未验证。
+- 早期 40 项离线测试已在 Muse 通过；Windows 当前 63 项通过，新增测试需在 Muse 运行。
+  Linux 完整发现、观看与领取尚未验证。
 - Windows 上，真实 WEB 登录态配合仓库的 aiohttp、恢复和活动构造代码：
   Dashboard 160 个活动，Inventory 0 个进行中活动，124 个适用的新活动进入矿机对象；
   详情和关联状态匹配，真实 integrity challenge 后重试成功。
@@ -33,10 +38,11 @@
 源码要求 Python 3.10 以上；`main.py` 在解析参数前就初始化 Tk，
 `--check-campaigns` 也需要图形界面。浏览器通过 Playwright 以可见方式启动。
 
-先确认有可用的图形会话，以及用户能够操作其中的 Twitch 登录页面。
-如果只有 SSH/无头容器，先说明缺少桌面入口，协调用户可访问的桌面或远程桌面。
-仅使用不可见的 Xvfb 不等于完成了交互登录，也不能据此宣称 campaign 查询失败。
-不要把浏览器改成 headless、复制 Windows 凭据或接管默认浏览器资料来跳过此步骤。
+Muse 已确认仅有 Xvfb、没有用户可操作桌面，不要重复检查。用户已授权使用其提供的
+WEB 凭据，但当前 `--browser-auth` 尚未实现导入或持久化；写入 `cookies.jar` 不会登录
+该临时浏览器。后续应实现并验证专用会话导入，不读取默认浏览器资料。
+若在另一个有可用桌面的环境测试当前实现，则由用户在官方页面自行登录。
+仅使用不可见的 Xvfb 不等于完成了交互登录。
 
 依赖包含 Tkinter、PyGObject/GTK 和浏览器所需的系统库。按实际发行版安装，
 不要直接套用别的系统的软件包名。仓库 `.github/workflows/ci.yml` 的 Ubuntu 22.04
