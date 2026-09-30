@@ -200,7 +200,11 @@ class NetworkObservation:
         if self.closed:
             return
         self.closed = True
-        self.report["network_frozen_ms"] = self.elapsed_ms()
+        cutoff = self.elapsed_ms()
+        # This freezes observation, not browser traffic. Keep the old key for
+        # existing reports, and record browser shutdown separately.
+        self.report["network_frozen_ms"] = cutoff
+        self.report["observation_frozen_ms"] = cutoff
         for request, entry in self.integrity.values():
             entry.update(self.metadata(request))
         entries = [entry for _, entry in self.integrity.values()]
@@ -464,6 +468,27 @@ class BrowserCapture:
         self.token = ""
 
 
+async def shutdown_browser(browser: Any, capture: BrowserCapture) -> None:
+    """Record the close call's outcome without claiming when network traffic stopped."""
+    timing = {
+        "state": "closing", "started_ms": capture.network.elapsed_ms(),
+        "completed_ms": None,
+    }
+    capture.report["browser_shutdown"] = timing
+    try:
+        await browser.close()
+    except asyncio.CancelledError:
+        timing["state"] = "cancelled"
+        raise
+    except Exception as error:
+        timing.update(state="failed", error=error_code(error))
+        raise ProbeFailure("browser_shutdown_failed") from None
+    else:
+        timing.update(state="closed", completed_ms=capture.network.elapsed_ms())
+    finally:
+        timing["finished_ms"] = capture.network.elapsed_ms()
+
+
 async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int) -> tuple[int, dict[str, Any]]:
     report: dict[str, Any] = {"state": "failed", "phase": "cookie_load"}
     try:
@@ -504,6 +529,7 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                         launch["proxy"] = proxy_options
                     browser = await runtime.chromium.launch(**launch)
                     page = None
+                    shutdown_task = None
                     try:
                         report["browser_version"] = browser.version
                         report["proxy_auth"] = bool(proxy_options and "username" in proxy_options)
@@ -562,6 +588,11 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                         report.update(state="passed", phase="complete")
                     finally:
                         try:
+                            if capture.rate_limited.is_set():
+                                # Start closing concurrently with parser cleanup.
+                                # capture.close freezes observation before its
+                                # first await, excluding shutdown ERR_ABORTEDs.
+                                shutdown_task = asyncio.create_task(shutdown_browser(browser, capture))
                             await capture.close()
                             if capture.rate_limited.is_set():
                                 # Close promptly; do not leave SDK requests running for a status snapshot.
@@ -577,7 +608,10 @@ async def check(cookie_file: Path, channel: str, proxy: str | None, seconds: int
                                 finally:
                                     timing["finished_ms"] = capture.network.elapsed_ms()
                         finally:
-                            await browser.close()
+                            if shutdown_task is not None:
+                                await shutdown_task
+                            else:
+                                await shutdown_browser(browser, capture)
             finally:
                 await capture.close()
         return 0, report

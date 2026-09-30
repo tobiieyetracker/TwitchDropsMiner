@@ -175,6 +175,7 @@ def test_integrity_lifecycle_distinguishes_no_request_from_no_response(phase):
         reply.request.failure = "net::ERR_CERT_AUTHORITY_INVALID must-not-print"
         observation.failed(reply.request)
     observation.freeze()
+    assert report["observation_frozen_ms"] == report["network_frozen_ms"]
     counts = report["integrity_network"]
     assert counts["requests"] == int(phase != "none")
     assert counts["request_methods"] == ({} if phase == "none" else {"POST": 1})
@@ -267,11 +268,16 @@ def test_unsupported_payloads_cannot_be_used_for_python_control(mutation):
 @pytest.mark.parametrize("case", [
     "success", "denied", "wrong_oauth", "wrong_issuer", "changed_login", "python_denied", "launch_failed",
     "sdk_rate_limit", "gql_rate_limit", "navigation_rate_limit", "cookie_rate_limit", "python_rate_limit",
+    "sdk_rate_limit_parser_cleanup",
 ])
 def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, tmp_path, case):
     import playwright.async_api
 
     callbacks = {}
+    parser_started = asyncio.Event()
+    parser_cancelled = asyncio.Event()
+    release_parser = asyncio.Event()
+    close_during_parser_cleanup = False
     headers = {**HEADERS, "Authorization": "OAuth wrong-fixture-token"} if case == "wrong_oauth" else HEADERS
 
     def rate_limit():
@@ -285,11 +291,25 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
     async def navigate(*args, **kwargs):
         context.add_cookies.assert_awaited_once()
         assert context.cookies.await_count == 1  # import was verified before any navigation
+        if case == "sdk_rate_limit_parser_cleanup":
+            async def waiting_body():
+                parser_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    parser_cancelled.set()
+                    await release_parser.wait()
+
+            pending = response({}, url="https://gql.twitch.tv/integrity")
+            pending.json = waiting_body
+            callbacks["request"](pending.request)
+            callbacks["response"](pending)
+            await parser_started.wait()
         reply = response(DENIED if case == "denied" else SUCCESS, headers=headers)
         callbacks["request"](reply.request)
         callbacks["response"](reply)
         callbacks["requestfinished"](reply.request)
-        if case in {"sdk_rate_limit", "gql_rate_limit", "navigation_rate_limit"}:
+        if case in {"sdk_rate_limit", "gql_rate_limit", "navigation_rate_limit", "sdk_rate_limit_parser_cleanup"}:
             rate_limit()
         if case == "navigation_rate_limit":
             await asyncio.Event().wait()
@@ -319,6 +339,24 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
     browser = SimpleNamespace(
         version="fixture-browser", new_context=AsyncMock(return_value=context), close=AsyncMock(),
     )
+    if case == "sdk_rate_limit_parser_cleanup":
+        async def close_while_parser_cleans_up():
+            nonlocal close_during_parser_cleanup
+            await parser_cancelled.wait()
+            assert not release_parser.is_set()
+            capture = callbacks["response"].__self__
+            assert capture.closed and capture.network.closed
+            before = deepcopy(capture.report["resource_failures"])
+            # Teardown failures must not become observed server failures.
+            callbacks["requestfailed"](SimpleNamespace(
+                url="https://assets.twitch.tv/fixture-cleanup", resource_type="script",
+                failure="net::ERR_ABORTED",
+            ))
+            assert capture.report["resource_failures"] == before
+            close_during_parser_cleanup = True
+            release_parser.set()
+
+        browser.close.side_effect = close_while_parser_cleans_up
     launch = AsyncMock(return_value=browser)
     if case == "launch_failed":
         launch.side_effect = RuntimeError("launch failed with fixture-proxy-password")
@@ -386,6 +424,11 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
             assert report["cookie_import"]["browser_auth_matches"] is True
             assert report["cookie_import"]["browser_device_matches"] is True
             browser.close.assert_awaited_once()
+            shutdown = report["browser_shutdown"]
+            assert shutdown["state"] == "closed"
+            assert report["observation_frozen_ms"] == report["network_frozen_ms"]
+            assert shutdown["started_ms"] >= report["observation_frozen_ms"]
+            assert shutdown["finished_ms"] >= shutdown["completed_ms"] >= shutdown["started_ms"]
             if "rate_limit" in case:
                 page.evaluate.assert_not_awaited()
                 assert report["error"] == "relevant_rate_limit"
@@ -395,9 +438,13 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
                 page.evaluate.assert_awaited_once_with(probe.PAGE_STATUS)
                 assert report["page_status_timing"]["after_network_freeze"] is True
                 assert report["page_status_timing"]["started_ms"] >= report["network_frozen_ms"]
+                assert shutdown["started_ms"] >= report["page_status_timing"]["finished_ms"]
                 assert report["network_summary"][0]["started"] == 1
                 assert report["network_summary"][0]["finished"] == 1
-            assert report["integrity_network"]["requests"] == 0
+            assert report["integrity_network"]["requests"] == int(case == "sdk_rate_limit_parser_cleanup")
+            if case == "sdk_rate_limit_parser_cleanup":
+                assert close_during_parser_cleanup
+                assert report["integrity_responses"][0]["body_state"] == "cancelled"
         if case in {"success", "python_denied", "python_rate_limit"}:
             assert len(post_calls) == 1
             url, options = post_calls[0]
@@ -415,5 +462,49 @@ def test_standalone_probe_uses_normal_browser_and_preserves_cookie(monkeypatch, 
             assert report["dashboard_responses"][0]["oauth_matches"] is False
         output = json.dumps(report)
         assert all(secret not in output for secret in (TOKEN, INTEGRITY, "fixture-proxy-password", "fixture-device"))
+
+    asyncio.run(scenario())
+
+
+def test_browser_close_failure_is_reported_without_claiming_it_closed():
+    async def scenario():
+        report = {}
+        capture = probe.BrowserCapture(TOKEN, "42", report)
+        browser = SimpleNamespace(close=AsyncMock(side_effect=RuntimeError("fixture-private-close-error")))
+        with pytest.raises(probe.ProbeFailure, match="^browser_shutdown_failed$"):
+            await probe.shutdown_browser(browser, capture)
+        shutdown = report["browser_shutdown"]
+        assert shutdown["state"] == "failed" and shutdown["error"] == "RuntimeError"
+        assert shutdown["completed_ms"] is None
+        assert shutdown["finished_ms"] >= shutdown["started_ms"]
+        browser.close.assert_awaited_once()
+        assert "fixture-" not in json.dumps(report)
+        await capture.close()
+
+    asyncio.run(scenario())
+
+
+def test_browser_close_cancellation_is_recorded_and_propagated():
+    async def scenario():
+        report = {}
+        capture = probe.BrowserCapture(TOKEN, "42", report)
+        entered = asyncio.Event()
+
+        async def unfinished_close():
+            entered.set()
+            await asyncio.Event().wait()
+
+        browser = SimpleNamespace(close=AsyncMock(side_effect=unfinished_close))
+        task = asyncio.create_task(probe.shutdown_browser(browser, capture))
+        await entered.wait()
+        assert report["browser_shutdown"]["state"] == "closing"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        shutdown = report["browser_shutdown"]
+        assert shutdown["state"] == "cancelled" and shutdown["completed_ms"] is None
+        assert shutdown["finished_ms"] >= shutdown["started_ms"]
+        browser.close.assert_awaited_once()
+        await capture.close()
 
     asyncio.run(scenario())
