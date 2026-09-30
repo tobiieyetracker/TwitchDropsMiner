@@ -62,6 +62,33 @@ def check_envelope(body: Any) -> None:
         raise WatchCheckError("gql_errors")
 
 
+def summarize_challenge(body: Any) -> dict:
+    """Record only presence and a bounded type category, never challenge values.
+
+    This is diagnostic evidence, not permission to refresh or replay a mutation.
+    Unknown type strings are deliberately not copied into reports.
+    """
+    unknown = {"present": None, "type": None}
+    if not isinstance(body, dict):
+        return unknown
+    extensions = body.get("extensions", {})
+    if not isinstance(extensions, dict):
+        return unknown
+    challenge = extensions.get("challenge")
+    if challenge is None:
+        return {"present": False, "type": None}
+    if not isinstance(challenge, dict):
+        return {"present": True, "type": "invalid"}
+    kind = challenge.get("type")
+    if kind is None or kind == "":
+        category = "unspecified"
+    elif not isinstance(kind, str):
+        category = "invalid"
+    else:
+        category = "integrity" if kind == "integrity" else "other"
+    return {"present": True, "type": category}
+
+
 def _current_user(body: Any, user_id: str) -> tuple[dict, bool | None]:
     check_envelope(body)
     data = _field(body, "data", "data", dict)

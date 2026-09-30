@@ -19,13 +19,15 @@ from types import SimpleNamespace
 import aiohttp
 
 from channel import Channel, Stream
-from check_channel_watch import WatchClient, WatchWindowEnded, stream_user, target_campaign
+from check_channel_watch import GQL, VALIDATE, WatchClient, WatchWindowEnded, stream_user, target_campaign
 from constants import GQL_QUERIES, WATCH_INTERVAL
 from finish_drop_journal import FinishJournal
 from finish_drop_state import refresh_target, select_target
 from inventory import BaseDrop
 from twitch import Twitch
-from watch_check_state import WatchCheckError, check_envelope, snapshot_current, snapshot_inventory
+from watch_check_state import (
+    WatchCheckError, check_envelope, snapshot_current, snapshot_inventory, summarize_challenge,
+)
 
 
 MAX_SECONDS = 5400
@@ -38,10 +40,11 @@ DEFAULT_STATE = Path.home() / ".local" / "state" / "twitchdropsminer" / "finish-
 
 
 class FinishClient(WatchClient):
-    def __init__(self, report, proxy, clock, deadline):
+    def __init__(self, report, proxy, clock, deadline, *, reconcile_only=False):
         super().__init__(report, proxy)
         self.clock, self.deadline = clock, deadline
-        self.request_limit = MAX_REQUESTS
+        self.reconcile_only = reconcile_only
+        self.request_limit = 2 if reconcile_only else MAX_REQUESTS
         self._claim_authorization = None
         self._claim_used = False
 
@@ -53,6 +56,11 @@ class FinishClient(WatchClient):
 
     @asynccontextmanager
     async def request(self, method, url, **kwargs):
+        if self.reconcile_only and not (
+            (method == "GET" and str(url) == str(VALIDATE))
+            or (method == "POST" and str(url) == str(GQL) and kwargs.get("json") == GQL_QUERIES["Inventory"])
+        ):
+            raise WatchCheckError("reconcile_request_not_allowed")
         kwargs["timeout"] = aiohttp.ClientTimeout(total=min(20, self.remaining()))
         async with super().request(method, url, **kwargs) as response:
             yield response
@@ -60,6 +68,8 @@ class FinishClient(WatchClient):
         self.remaining()
 
     async def gql_request(self, operation):
+        if self.reconcile_only and operation != GQL_QUERIES["Inventory"]:
+            raise WatchCheckError("reconcile_operation_not_allowed")
         if not isinstance(operation, dict) or operation.get("operationName") != GQL_QUERIES["ClaimDrop"]["operationName"]:
             return await super().gql_request(operation)
         expected = GQL_QUERIES["ClaimDrop"].with_variables(
@@ -71,6 +81,8 @@ class FinishClient(WatchClient):
         self._claim_used = True
         self._claim_authorization = None
         body, _ = await Twitch._gql_request_once(self, operation)
+        self.report["claim"]["response_challenge"] = summarize_challenge(body)
+        self.report["requests"][-1]["response_challenge"] = self.report["claim"]["response_challenge"]
         check_envelope(body)
         return body
 
@@ -218,6 +230,8 @@ async def experiment(client, journal, channel_login, campaign_name, drop_id, lin
     if saved is not None:
         await reconcile_previous(client, journal, saved, campaign_name, drop_id)
         return
+    if client.reconcile_only:
+        raise WatchCheckError("reconcile_journal_missing")
     target = await read_inventory(client, "baseline", campaign_name=campaign_name, drop_id=drop_id)
     client.report["target"] = target.public_dict()
     if await finish_if_ready(client, journal, target):
@@ -296,24 +310,29 @@ async def experiment(client, journal, channel_login, campaign_name, drop_id, lin
 
 
 async def check(cookie_file, channel, campaign, proxy=None, linked_confirmed=False,
-                seconds=MAX_SECONDS, state_dir=DEFAULT_STATE, drop_id=None, *, clock=None):
-    report = {"state": "failed", "mode": "finish_one_drop", "cookie_loaded": False,
+                seconds=MAX_SECONDS, state_dir=DEFAULT_STATE, drop_id=None, *, clock=None,
+                reconcile_only=False):
+    budget = min(seconds, 120) if reconcile_only else seconds
+    report = {"state": "failed", "mode": "reconcile_claim" if reconcile_only else "finish_one_drop", "cookie_loaded": False,
               "web_token_valid": False, "requests": [], "inventory_checks": [],
               "current_checks": [], "watch_sends": 0,
               "claim": {"attempted": False, "previous_attempt": False, "confirmed": False},
-              "limits": {"total_seconds": seconds, "requests": MAX_REQUESTS,
-                         "stall_seconds": STALL_SECONDS, "watch_finish_reserve_seconds": FINISH_RESERVE}}
+              "limits": {"total_seconds": budget, "requests": 2 if reconcile_only else MAX_REQUESTS,
+                         **({} if reconcile_only else {"stall_seconds": STALL_SECONDS,
+                             "watch_finish_reserve_seconds": FINISH_RESERVE})}}
     if clock is None:
         clock = SimpleNamespace(time=asyncio.get_running_loop().time, sleep=asyncio.sleep)
     start = clock.time()
-    client = FinishClient(report, proxy, clock, start + seconds)
+    client = FinishClient(report, proxy, clock, start + budget, reconcile_only=reconcile_only)
     try:
-        if (type(seconds) is not int or not 180 <= seconds <= MAX_SECONDS
+        if (type(seconds) is not int or not (1 if reconcile_only else 180) <= seconds <= MAX_SECONDS
             or not re.fullmatch(r"[A-Za-z0-9_]{1,25}", channel) or not campaign.strip()):
             raise WatchCheckError("invalid_check_parameters")
         # Held across network work; concurrent instances fail before opening cookies.
         with FinishJournal(state_dir) as journal:
-            journal.read()  # fail on corrupt state before making a network request
+            saved = journal.read()  # fail on corrupt state before making a network request
+            if reconcile_only and saved is None:
+                raise WatchCheckError("reconcile_journal_missing")
             async def run():
                 await client.open(cookie_file)
                 await experiment(client, journal, channel.lower(), campaign, drop_id, linked_confirmed)
@@ -339,6 +358,8 @@ def main():
     parser.add_argument("--linked-confirmed", action="store_true")
     parser.add_argument("--max-seconds", type=int, default=MAX_SECONDS)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE)
+    parser.add_argument("--reconcile-only", action="store_true",
+                        help="Require the existing attempt journal; only validate identity and read Inventory")
     args = parser.parse_args()
     logging.disable(logging.CRITICAL)
     proxy = os.environ.get(args.proxy_env) if args.proxy_env else None
@@ -346,7 +367,9 @@ def main():
         print(json.dumps({"state": "failed", "error": "proxy_environment_missing"}))
         return 1
     code, report = asyncio.run(check(args.cookies, args.channel, args.campaign_name, proxy,
-                                     args.linked_confirmed, args.max_seconds, args.state_dir, args.drop_id))
+                                     args.linked_confirmed,
+                                     args.max_seconds, args.state_dir, args.drop_id,
+                                     reconcile_only=args.reconcile_only))
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return code
 

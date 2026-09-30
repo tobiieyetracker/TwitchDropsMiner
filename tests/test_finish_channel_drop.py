@@ -136,7 +136,7 @@ class Network:
 
 
 def scenario(monkeypatch, tmp_path, *, configure=None, seconds=5400, previous=False,
-             journal_failure=False, locked=False):
+             journal_failure=False, locked=False, reconcile_only=False):
     async def run():
         jar = aiohttp.CookieJar()
         cookie = SimpleCookie()
@@ -162,7 +162,8 @@ def scenario(monkeypatch, tmp_path, *, configure=None, seconds=5400, previous=Fa
         monkeypatch.setattr(aiohttp, "ClientSession", network.session)
         async def check():
             return await finish.check(cookie_file, "example", "Test campaign", linked_confirmed=True,
-                                      seconds=seconds, state_dir=state_dir, clock=clock)
+                                      seconds=seconds, state_dir=state_dir, clock=clock,
+                                      reconcile_only=reconcile_only)
         if locked:
             with FinishJournal(state_dir):
                 code, report = await check()
@@ -250,6 +251,11 @@ def test_failed_claim_is_not_replayed_or_followed_by_network(monkeypatch, tmp_pa
     assert code == 1 and report["state"] == "claim_unconfirmed" and report["error"] == expected
     assert len(network.claims) == 1 and network.calls[-1][3]["json"]["operationName"] == CLAIM_OP
     assert journal["outcome"] == "attempted"
+    assert not any(r["phase"] == "claim_confirmation" for r in report["requests"])
+    assert report["inventory_checks"][-1]["checkpoint"] == "claim_inventory"
+    if expected == "gql_challenge":
+        assert report["claim"]["response_challenge"] == {"present": True, "type": "integrity"}
+        assert report["requests"][-1]["integrity_header_present"] is False
 
 
 @pytest.mark.parametrize("confirm,disappear,status", [
@@ -363,4 +369,50 @@ def test_unarmed_claim_operation_is_rejected():
         client = finish.FinishClient({"requests": []}, None, clock, 300)
         with pytest.raises(WatchCheckError, match="claim_not_authorized"):
             await client.gql_request(GQL_QUERIES["ClaimDrop"].with_variables({"input": {"dropInstanceID": CLAIM_ID}}))
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("claimed", [False, True])
+def test_explicit_reconcile_has_two_reads_and_no_watching_or_claiming(monkeypatch, tmp_path, claimed):
+    code, report, network, saved = scenario(
+        monkeypatch, tmp_path, previous=True, reconcile_only=True,
+        configure=lambda n: setattr(n, "initial_claimed", claimed),
+    )
+    assert code == (0 if claimed else 1) and report["mode"] == "reconcile_claim"
+    assert report["limits"] == {"total_seconds": 120, "requests": 2}
+    assert len(network.calls) == 2 and not network.sends and not network.claims
+    assert report["claim"]["previous_attempt"] is True
+    assert saved["outcome"] == ("confirmed" if claimed else "attempted")
+
+
+def test_explicit_reconcile_missing_journal_never_opens_network(monkeypatch, tmp_path):
+    code, report, network, saved = scenario(monkeypatch, tmp_path, reconcile_only=True)
+    assert code == 1 and report["error"] == "reconcile_journal_missing"
+    assert not network.sessions and not network.calls and saved is None
+
+
+def test_reconcile_120_second_budget_is_valid(monkeypatch, tmp_path):
+    _, report, network, _ = scenario(monkeypatch, tmp_path, previous=True, reconcile_only=True, seconds=120)
+    assert report["error"] == "previous_claim_not_confirmed" and len(network.calls) == 2
+
+
+def test_reconcile_stops_on_inventory_challenge_without_retry(monkeypatch, tmp_path):
+    def configure(n):
+        n.responses["Inventory"] = Response({"extensions": {"challenge": {"type": "integrity", "secret": TOKEN}}})
+    code, report, network, saved = scenario(monkeypatch, tmp_path, previous=True, reconcile_only=True, configure=configure)
+    assert code == 1 and report["state"] == "claim_unconfirmed" and report["error"] == "gql_challenge"
+    assert len(network.calls) == 2 and not network.claims and saved["outcome"] == "attempted"
+    assert report["requests"][-1]["response_challenge"] == {"present": True, "type": "integrity"}
+
+
+def test_reconcile_guards_block_even_an_armed_mutation_or_watch_request():
+    async def run():
+        client = finish.FinishClient({"requests": []}, None, Clock(), 120, reconcile_only=True)
+        client._claim_authorization = CLAIM_ID
+        with pytest.raises(WatchCheckError, match="reconcile_operation_not_allowed"):
+            await client.gql_request(GQL_QUERIES["ClaimDrop"].with_variables({"input": {"dropInstanceID": CLAIM_ID}}))
+        with pytest.raises(WatchCheckError, match="reconcile_request_not_allowed"):
+            async with client.request("POST", "https://spade.twitch.tv/track", data={}):
+                pytest.fail("watch transport must not open")
+        assert client._session is None
     asyncio.run(run())

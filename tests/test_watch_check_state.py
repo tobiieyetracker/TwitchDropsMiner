@@ -3,13 +3,33 @@ import json
 
 import pytest
 
-from watch_check_state import WatchCheckError, snapshot_current, snapshot_inventory
+from watch_check_state import WatchCheckError, snapshot_current, snapshot_inventory, summarize_challenge
 
 
 USER_ID = "account-private-id"
 CAMPAIGN_ID = "campaign-private-id"
 DROP_ID = "target-drop"
 TARGETS = {DROP_ID}
+
+
+@pytest.mark.parametrize("body,present,kind", [
+    ({}, False, None),
+    ({"extensions": {"challenge": None}}, False, None),
+    ({"extensions": {"challenge": {"type": "integrity", "token": "private-value"}}}, True, "integrity"),
+    ({"extensions": {"challenge": {"type": "private-value"}}}, True, "other"),
+    ({"extensions": {"challenge": {}}}, True, "unspecified"),
+    ({"extensions": {"challenge": {"type": None}}}, True, "unspecified"),
+    ({"extensions": {"challenge": {"type": ""}}}, True, "unspecified"),
+    ({"extensions": {"challenge": {"type": []}}}, True, "invalid"),
+    ({"extensions": {"challenge": False}}, True, "invalid"),
+    ({"extensions": {"challenge": "private-value"}}, True, "invalid"),
+    ({"extensions": []}, None, None),
+    (None, None, None),
+])
+def test_challenge_summary_is_bounded_and_preserves_uncertainty(body, present, kind):
+    summary = summarize_challenge(body)
+    assert summary == {"present": present, "type": kind}
+    assert "private-value" not in json.dumps(summary)
 
 
 def current_body(session=None, *, user_id=USER_ID):

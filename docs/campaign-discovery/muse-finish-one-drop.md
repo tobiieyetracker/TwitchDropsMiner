@@ -16,6 +16,47 @@ CurrentDrop 基线是空 dropID，目标分钟为未知；约五分钟和十分�
 不能单独证明“缺 Cookie 就是此前失败的唯一原因”。它证明这条真实会话、原矿机方法的
 纯 Python 路径已能与服务器正进度同时成立，值得继续验证领取。
 
+## 7614144 实测：观看达标，领取结果未知
+
+Muse 报告已保存 `probe-reports/finish-drop-7614144-20260930-2110.json`。
+用户转述的只读复核确认：起始 Inventory 为 18/60，46 次观看事件后目标达到 60/60。
+领取前再次验证身份并读取 `claim_inventory`，其 `is_claimed:false`；随后唯一一次
+ClaimDrop 请求 HTTP 200，程序以 `error:gql_challenge`、`phase:claim` 退出。
+
+**本轮没有领取后的 Inventory 读取。** 最后的 `claim_inventory` 是提交前快照，
+确认循环未执行。`claim_unconfirmed` 表示结果未知，不能改写为“领取确定失败”。
+旧版对任何非 null 的 `extensions.challenge` 都给出同一个错误码，没有保存 type；
+所以“此次是 integrity challenge”尚无记录支持，更不能推断领取的风控严格程度。
+
+新代码将 GQL 响应的 challenge 摘要保存在对应请求的 `response_challenge`，领取响应
+另放在 `claim.response_challenge`。只保留 presence 和固定类型枚举；未知字符串、原始
+challenge、token 和响应体均不输出。实际请求记录只增加 `integrity_header_present`
+布尔值。它们服务于以后的观测，无法补回旧响应，也不是重新提交领取的理由。
+
+### 当前下一步：只读核对一次
+
+保留原状态目录，更新到本次交接指定提交后执行一次：
+
+```bash
+DISPLAY=:99 python finish_channel_drop.py --cookies cookies.jar --channel hjune --campaign-name "Rust Isles AR" --proxy-env HTTPS_PROXY --reconcile-only
+```
+
+若此前显式用了不同的 `--state-dir`，必须使用同一个目录。此模式必须找到原领取尝试
+日志；缺失或损坏就在联网前失败，绝不会改走观看或领取。它最多运行 120 秒、发送两次
+请求：一次验证 WEB 身份，一次读取 Inventory，并检查原账号与 campaign/drop 绑定。
+请求层和 GQL 层都拒绝其他操作，不启动浏览器，不提交 mutation，不自动重试。
+
+回报脱敏 JSON、退出码与新提交，保存为独立的新报告，不覆盖原报告：
+
+- `claim_confirmed` 且 `claim.previous_attempt:true`：现在同一目标的 `isClaimed:true`，
+  原尝试记录可标为已确认。它不证明一定是哪一个客户端使状态发生了变化。
+- `claim_unconfirmed`：当前仍是 false、目标消失或读取失败；保留日志，不能自动再次领取。
+- `reconcile_journal_missing`、账号／目标不匹配或日志损坏：保持原文件并回报，不创建
+  替代日志、不换目录，不去掉 `--reconcile-only`。
+
+这次核对只回答“现在是否已经领取”，不重新获取旧 challenge 类型，也不验证新的
+完整性方案。后续正常网页领取链的源码比对见[领取 challenge 源码记录](claim-challenge-source.md)。
+
 ## 保留文件并更新
 
 在现有仓库和 Python 环境中工作，保留 Cookie、`manual_watch.py`、本地报告及所有改动。
@@ -27,9 +68,9 @@ CurrentDrop 基线是空 dropID，目标分钟为未知；约五分钟和十分�
 本次新增入口是 `finish_channel_drop.py`；之前的 `check_channel_watch.py` 仍保留十分钟语义。
 不要修改原有脚本以延长它，也不要把新入口加入 cron。
 
-## 执行一次
+## 历史：7614144 的观看及领取命令（当前不再执行）
 
-使用 Muse 已确认的 Facepunch connections 关联证据，在现有环境原样运行一次：
+下面记录的是已结束实验的命令；当前使用上面的 `--reconcile-only` 命令：
 
 ```bash
 DISPLAY=:99 python finish_channel_drop.py --cookies cookies.jar --channel hjune --campaign-name "Rust Isles AR" --proxy-env HTTPS_PROXY --linked-confirmed

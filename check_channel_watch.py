@@ -26,7 +26,9 @@ from constants import ClientType, GQL_QUERIES, WATCH_INTERVAL
 from gql_recovery import validate_campaign_response
 from twitch import Twitch, _AuthState
 from utils import RateLimiter
-from watch_check_state import WatchCheckError, check_envelope, snapshot_current, snapshot_inventory
+from watch_check_state import (
+    WatchCheckError, check_envelope, snapshot_current, snapshot_inventory, summarize_challenge,
+)
 
 
 WEB = URL("https://www.twitch.tv")
@@ -119,6 +121,7 @@ class WatchClient(Twitch):
             web_client_matches=headers.get("Client-Id") == ClientType.WEB.CLIENT_ID
                 if "Client-Id" in headers else None,
             web_ua_matches=headers.get("User-Agent") == self._client_type.USER_AGENT,
+            integrity_header_present="Client-Integrity" in headers,
             content_type=headers.get("Content-Type"),
         )
 
@@ -173,6 +176,7 @@ class WatchClient(Twitch):
             raise WatchCheckError("operation_not_allowed")
         # Use the actual miner header/transport builder, without its retry loop.
         body, _ = await Twitch._gql_request_once(self, operation)
+        self.report["requests"][-1]["response_challenge"] = summarize_challenge(body)
         check_envelope(body)
         validate_campaign_response(operation, body)
         return body
