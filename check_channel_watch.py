@@ -48,12 +48,20 @@ class WatchWindowEnded(Exception):
 
 
 class WatchClient(Twitch):
+    # Internal, fixed profiles let a narrowly scoped probe reuse the same
+    # session/transport. The existing watch probe remains WEB by default.
+    AUTH_CLIENT_TYPE = ClientType.WEB
+    COOKIE_ORIGIN = WEB
+    IDENTITY_LABEL = "web"
+    INVALID_TOKEN_ERROR = "not_a_valid_web_token"
+    MISSING_TOKEN_ERROR = "cookie_has_no_web_auth_token"
+
     def __init__(self, report: dict, proxy: str | None):
         # Do not construct Tk or enter the application's login/watch/claim loops.
         self.report = report
         self.settings = SimpleNamespace(proxy=proxy)
         self.gui = SimpleNamespace(channels=None, coro_unless_closed=passthrough)
-        self._client_type = ClientType.WEB  # set BEFORE creating the shared Session
+        self._client_type = self.AUTH_CLIENT_TYPE  # before creating the shared Session
         self._web_session = None
         self._session = None
         self._auth_state = _AuthState(self)
@@ -66,9 +74,9 @@ class WatchClient(Twitch):
     async def open(self, cookie_file: Path):
         jar = aiohttp.CookieJar()
         jar.load(cookie_file)
-        cookie = jar.filter_cookies(WEB).get("auth-token")
+        cookie = jar.filter_cookies(self.COOKIE_ORIGIN).get("auth-token")
         if cookie is None or not cookie.value:
-            raise WatchCheckError("cookie_has_no_web_auth_token")
+            raise WatchCheckError(self.MISSING_TOKEN_ERROR)
         self.token = cookie.value
         trace = aiohttp.TraceConfig()
         trace.on_request_headers_sent.append(self.sent_headers)
@@ -82,22 +90,22 @@ class WatchClient(Twitch):
         auth = self._auth_state
         auth.access_token = self.token
         # Preserve an existing device cookie, without copying cookies across domains.
-        device = jar.filter_cookies(WEB).get("unique_id")
+        device = jar.filter_cookies(self.COOKIE_ORIGIN).get("unique_id")
         if device is not None:
             auth.device_id = device.value
 
     async def validate_identity(self):
         async with self.request("GET", VALIDATE, headers={"Authorization": f"OAuth {self.token}"}) as response:
             body = await response.json()
-        if not isinstance(body, dict) or body.get("client_id") != ClientType.WEB.CLIENT_ID:
-            raise WatchCheckError("not_a_valid_web_token")
+        if not isinstance(body, dict) or body.get("client_id") != self.AUTH_CLIENT_TYPE.CLIENT_ID:
+            raise WatchCheckError(self.INVALID_TOKEN_ERROR)
         user_id = body.get("user_id")
         if not isinstance(user_id, str) or not user_id.isdigit():
             raise WatchCheckError("validation_user_missing")
         if hasattr(self._auth_state, "user_id") and self._auth_state.user_id != int(user_id):
             raise WatchCheckError("validation_user_changed")
         self._auth_state.user_id = int(user_id)
-        self.report["web_token_valid"] = True
+        self.report[f"{self.IDENTITY_LABEL}_token_valid"] = True
 
     async def get_auth(self):
         # Identity was validated above. The normal login method may save cookies
@@ -118,11 +126,15 @@ class WatchClient(Twitch):
             oauth_sent="Authorization" in headers,
             oauth_matches=headers.get("Authorization") == f"OAuth {self.token}"
                 if "Authorization" in headers else None,
-            web_client_matches=headers.get("Client-Id") == ClientType.WEB.CLIENT_ID
-                if "Client-Id" in headers else None,
-            web_ua_matches=headers.get("User-Agent") == self._client_type.USER_AGENT,
             integrity_header_present="Client-Integrity" in headers,
             content_type=headers.get("Content-Type"),
+        )
+        entry[f"{self.IDENTITY_LABEL}_client_matches"] = (
+            headers.get("Client-Id") == self.AUTH_CLIENT_TYPE.CLIENT_ID
+            if "Client-Id" in headers else None
+        )
+        entry[f"{self.IDENTITY_LABEL}_ua_matches"] = (
+            headers.get("User-Agent") == self.AUTH_CLIENT_TYPE.USER_AGENT
         )
 
     @asynccontextmanager
@@ -136,7 +148,7 @@ class WatchClient(Twitch):
         if len(self.report["requests"]) >= self.request_limit:
             raise WatchCheckError("request_budget_exhausted")
         session = await self.get_session()
-        current_cookie = session.cookie_jar.filter_cookies(WEB).get("auth-token")
+        current_cookie = session.cookie_jar.filter_cookies(self.COOKIE_ORIGIN).get("auth-token")
         if current_cookie is None or current_cookie.value != self.token:
             raise WatchCheckError("auth_cookie_changed")
         target_cookie = session.cookie_jar.filter_cookies(target).get("auth-token")
