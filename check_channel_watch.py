@@ -59,6 +59,7 @@ class WatchClient(Twitch):
         self.token = None
         self.phase = "setup"
         self.watch_deadline = None
+        self.request_limit = 40
 
     async def open(self, cookie_file: Path):
         jar = aiohttp.CookieJar()
@@ -129,7 +130,7 @@ class WatchClient(Twitch):
             for host in ("twitch.tv", "twitchcdn.net", "jtvnw.net")
         ):
             raise WatchCheckError("unexpected_endpoint")
-        if len(self.report["requests"]) >= 40:
+        if len(self.report["requests"]) >= self.request_limit:
             raise WatchCheckError("request_budget_exhausted")
         session = await self.get_session()
         current_cookie = session.cookie_jar.filter_cookies(WEB).get("auth-token")
