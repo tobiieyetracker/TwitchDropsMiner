@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 import logging
+import sys
 from time import time
 from copy import deepcopy
 from itertools import chain
@@ -20,6 +21,8 @@ from gui import GUIManager
 from channel import Channel
 from websocket import WebsocketPool
 from inventory import DropsCampaign
+from gql_recovery import recover_challenges, validate_campaign_response
+from web_session import TwitchWebSession
 from exceptions import (
     ExitRequest,
     GQLException,
@@ -49,6 +52,7 @@ from constants import (
     GQL_QUERIES,
     WATCH_INTERVAL,
     State,
+    ClientInfo,
     ClientType,
     PriorityMode,
     WebsocketTopic,
@@ -100,6 +104,9 @@ class _AuthState:
         self._delattrs("access_token", "user_id")
         self._logged_in.clear()
         self._twitch.gui.help._invalidate_button.config(state="disabled")
+        if self._twitch._web_session is not None:
+            self._twitch._web_session.invalidate()
+            return
         if delete_cookies:
             session = self._twitch._session
             if session is not None:
@@ -152,6 +159,11 @@ class _AuthState:
                     #     "verification_uri": "https://www.twitch.tv/activate?device-code=ABCDEFGH"
                     # }
                     response_json: JsonType = await response.json()
+                    if "device_code" not in response_json:
+                        raise LoginException(
+                            "Twitch did not issue a device code for this client. "
+                            "Use --browser-auth to sign in with the web client."
+                        )
                     device_code: str = response_json["device_code"]
                     user_code: str = response_json["user_code"]
                     interval: int = response_json["interval"]
@@ -360,6 +372,23 @@ class _AuthState:
             await self._validate()
 
     async def _validate(self):
+        if (web_session := self._twitch._web_session) is not None:
+            first_login = not self._logged_in.is_set()
+            credentials = await self._twitch.gui.coro_unless_closed(web_session.start())
+            self.access_token = credentials.access_token
+            self.user_id = credentials.user_id
+            self.device_id = credentials.headers["X-Device-Id"]
+            self.session_id = credentials.headers.get("Client-Session-Id", "")
+            self._twitch._client_type = ClientInfo(
+                ClientType.WEB.CLIENT_URL,
+                credentials.headers["Client-Id"],
+                credentials.headers["User-Agent"],
+            )
+            if first_login:
+                self._twitch.gui.login.update(_("gui", "login", "logged_in"), self.user_id)
+            self._twitch.gui.help._invalidate_button.config(state="normal")
+            self._logged_in.set()
+            return
         if not hasattr(self, "session_id"):
             self.session_id = create_nonce(CHARS_HEX_LOWER, 16)
         if not self._hasattrs("device_id", "access_token", "user_id"):
@@ -446,6 +475,13 @@ class Twitch:
         self._qgl_limiter = RateLimiter(capacity=5, window=1)
         # Client type, session and auth
         self._client_type: ClientInfo = ClientType.ANDROID_APP
+        self._web_session: TwitchWebSession | None = None
+        if getattr(settings, "browser_auth", False):
+            self._client_type = ClientType.WEB
+            self._web_session = TwitchWebSession(
+                channel=getattr(settings, "browser_channel", None),
+                proxy=str(settings.proxy) if settings.proxy else "", notify=self.print,
+            )
         self._session: aiohttp.ClientSession | None = None
         self._auth_state: _AuthState = _AuthState(self)
         # GUI
@@ -468,7 +504,7 @@ class Twitch:
         # load in cookies
         cookie_jar = aiohttp.CookieJar()
         try:
-            if COOKIES_PATH.exists():
+            if self._web_session is None and COOKIES_PATH.exists():
                 cookie_jar.load(COOKIES_PATH)
         except Exception:
             # if loading in the cookies file ends up in an error, just ignore it
@@ -514,9 +550,12 @@ class Twitch:
             for cookie_key, cookie in list(cookie_jar._cookies.items()):
                 if not cookie:
                     del cookie_jar._cookies[cookie_key]
-            cookie_jar.save(COOKIES_PATH)
+            if self._web_session is None:
+                cookie_jar.save(COOKIES_PATH)
             await self._session.close()
             self._session = None
+        if self._web_session is not None:
+            await self._web_session.close()
         self._drops.clear()
         self.channels.clear()
         self.inventory.clear()
@@ -560,6 +599,11 @@ class Twitch:
         Can be used to print messages within the GUI.
         """
         self.gui.print(message)
+        if getattr(self.settings, "check_campaigns", False) and sys.stdout is not None:
+            # A source-run diagnostic must remain observable when Tk cannot be captured.
+            # pythonw and a closed/limited-encoding console must still work.
+            with suppress(OSError, UnicodeError):
+                print(message, flush=True)
 
     def save(self, *, force: bool = False) -> None:
         """
@@ -616,6 +660,10 @@ class Twitch:
         """
         self.gui.start()
         auth_state = await self.get_auth()
+        if getattr(self.settings, "check_campaigns", False):
+            await self.fetch_inventory()
+            self.print(f"Campaign discovery check completed: {len(self.inventory)} campaigns.")
+            return
         await self.websocket.start()
         # NOTE: watch task is explicitly restarted on each new run
         if self._watching_task is not None:
@@ -1244,7 +1292,8 @@ class Twitch:
         method = method.upper()
         if self.settings.proxy and "proxy" not in kwargs:
             kwargs["proxy"] = self.settings.proxy
-        logger.debug(f"Request: ({method=}, {url=}, {kwargs=})")
+        # Headers can contain OAuth and integrity credentials. Never log them.
+        logger.debug("Request: method=%s url=%s", method, url)
         session_timeout = timedelta(seconds=session.timeout.total or 0)
         backoff = ExponentialBackoff(maximum=3*60)
         for delay in backoff:
@@ -1262,7 +1311,7 @@ class Twitch:
                     session.request(method, url, **kwargs)
                 )
                 assert response is not None
-                logger.debug(f"Response: {response.status}: {response}")
+                logger.debug("Response: status=%s url=%s", response.status, url)
                 if response.status < 500:
                     # pre-read the response to avoid getting errors outside of the context manager
                     raw_response = await response.read()  # noqa
@@ -1287,6 +1336,19 @@ class Twitch:
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self.gui.wait_until_closed(), timeout=delay)
 
+    async def _gql_request_once(
+        self, ops: GQLOperation | list[GQLOperation]
+    ) -> tuple[JsonType | list[JsonType], str | None]:
+        auth_state = await self.get_auth()
+        headers = auth_state.headers(user_agent=self._client_type.USER_AGENT, gql=True)
+        if self._web_session is not None:
+            headers.update(await self.gui.coro_unless_closed(self._web_session.headers()))
+        async with self._qgl_limiter:
+            async with self.request(
+                "POST", "https://gql.twitch.tv/gql", json=ops, headers=headers,
+            ) as response:
+                return await response.json(), headers.get("Client-Integrity")
+
     @overload
     async def gql_request(self, ops: GQLOperation) -> JsonType:
         ...
@@ -1303,15 +1365,23 @@ class Twitch:
         # Use a flag to retry the request a single time, if a specific set of errors is encountered
         single_retry: bool = True
         for delay in backoff:
-            async with self._qgl_limiter:
-                auth_state = await self.get_auth()
-                async with self.request(
-                    "POST",
-                    "https://gql.twitch.tv/gql",
-                    json=ops,
-                    headers=auth_state.headers(user_agent=self._client_type.USER_AGENT, gql=True),
-                ) as response:
-                    response_json: JsonType | list[JsonType] = await response.json()
+            response_json, integrity_token = await self._gql_request_once(ops)
+
+            async def refresh_integrity() -> None:
+                assert self._web_session is not None
+                await self.gui.coro_unless_closed(
+                    self._web_session.refresh_integrity(rejected_token=integrity_token)
+                )
+
+            async def replay(challenged_ops: list[JsonType]) -> JsonType | list[JsonType]:
+                retried, _token = await self._gql_request_once(challenged_ops)
+                return retried
+
+            response_json = await recover_challenges(
+                ops, response_json,
+                refresh=refresh_integrity if self._web_session is not None else None,
+                replay=replay,
+            )
             gql_logger.debug(f"GQL Response: {response_json}")
             orig_response = response_json
             if isinstance(response_json, list):
@@ -1333,7 +1403,7 @@ class Twitch:
                             ):
                                 logger.error(
                                     f"Retrying a {error_dict['message']} for "
-                                    f"{response_json['extensions']['operationName']}"
+                                    f"{response_json.get('extensions', {}).get('operationName', 'query')}"
                                 )
                                 single_retry = False
                                 if delay < 5:
@@ -1369,6 +1439,9 @@ class Twitch:
                 if force_retry:
                     break
             else:
+                operations = ops if isinstance(ops, list) else [ops]
+                for operation, item in zip(operations, response_list):
+                    validate_campaign_response(operation, item)
                 return orig_response
             await asyncio.sleep(delay)
         raise RuntimeError("Retry loop was broken")
@@ -1424,9 +1497,11 @@ class Twitch:
             b["id"]: timestamp(b["lastAwardedAt"]) for b in inventory["gameEventDrops"]
         }
         inventory_data: dict[str, JsonType] = {c["id"]: c for c in ongoing_campaigns}
+        ongoing_ids = set(inventory_data)
         # fetch general available campaigns data (campaigns)
         response = await self.gql_request(GQL_QUERIES["Campaigns"])
-        available_list: list[JsonType] = response["data"]["currentUser"]["dropCampaigns"] or []
+        # gql_request distinguishes a real empty list from a rejected/null response.
+        available_list: list[JsonType] = response["data"]["currentUser"]["dropCampaigns"]
         applicable_statuses = ("ACTIVE", "UPCOMING")
         available_campaigns: dict[str, JsonType] = {
             c["id"]: c
@@ -1533,7 +1608,17 @@ class Twitch:
         # NOTE: maintenance task is restarted at the end of each inventory fetch
         if self._mnt_task is not None and not self._mnt_task.done():
             self._mnt_task.cancel()
-        self._mnt_task = asyncio.create_task(self._maintenance_task())
+        self._mnt_task = None
+        if getattr(self.settings, "check_campaigns", False):
+            new_ids = {c.id for c in campaigns} - ongoing_ids
+            linked = sum(c.linked for c in campaigns)
+            self.print(
+                f"Campaign sources: {len(ongoing_ids)} in progress, "
+                f"{len(available_list)} on dashboard, {len(new_ids)} newly discovered. "
+                f"Account links: {linked} connected, {len(campaigns) - linked} not connected."
+            )
+        else:
+            self._mnt_task = asyncio.create_task(self._maintenance_task())
 
     def get_active_campaign(self, channel: Channel | None = None) -> DropsCampaign | None:
         if not self.wanted_games:

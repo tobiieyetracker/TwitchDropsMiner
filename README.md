@@ -19,6 +19,9 @@ Every several seconds, the application pretends to watch a particular stream by 
 
 ### Usage:
 
+- For the campaign discovery compatibility patch and browser sign-in option, see
+  [campaign discovery setup and validation status](CAMPAIGN_DISCOVERY.md).
+
 - Download and unzip [the latest release](https://github.com/DevilXD/TwitchDropsMiner/releases) - it's recommended to keep it in the folder it comes in.
 - Run it and login/connect the miner to your Twitch account by using the in-app login form.
 - After a successful login, the app should fetch a list of all available campaigns and games you can mine drops for - you can then select and add games of choice to the Priority List available on the Settings tab, and then press on the `Reload` button to start processing. It will fetch a list of all applicable streams it can watch, and start mining right away. You can also manually switch to a different channel as needed.

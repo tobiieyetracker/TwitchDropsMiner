@@ -68,6 +68,9 @@ if __name__ == "__main__":
         log: bool
         tray: bool
         dump: bool
+        browser_auth: bool
+        browser_channel: str | None
+        check_campaigns: bool
 
         # TODO: replace int with union of literal values once typeshed updates
         @property
@@ -112,6 +115,18 @@ if __name__ == "__main__":
     parser.add_argument("--tray", action="store_true")
     parser.add_argument("--log", action="store_true")
     parser.add_argument("--dump", action="store_true")
+    parser.add_argument(
+        "--browser-auth", action="store_true",
+        help="Sign in using an isolated Twitch browser session (requires requirements-browser.txt)",
+    )
+    parser.add_argument(
+        "--browser-channel", choices=("chrome", "msedge", "chromium"), default=None,
+        help="Browser for --browser-auth (default: Edge on Windows, Chrome elsewhere)",
+    )
+    parser.add_argument(
+        "--check-campaigns", action="store_true",
+        help="Fetch campaigns once without starting streams or claiming drops",
+    )
     # undocumented debug args
     parser.add_argument(
         "--debug-ws", dest="_debug_ws", action="store_true", help=argparse.SUPPRESS
@@ -182,7 +197,7 @@ if __name__ == "__main__":
             await client.shutdown()
         if not client.gui.close_requested:
             # user didn't request the closure
-            client.gui.tray.change_icon("error")
+            client.gui.tray.change_icon("idle" if args.check_campaigns and exit_status == 0 else "error")
             client.print(_("status", "terminated"))
             client.gui.status.update(_("gui", "status", "terminated"))
             # notify the user about the closure
