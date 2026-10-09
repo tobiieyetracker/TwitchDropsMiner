@@ -733,9 +733,10 @@ class Twitch:
                     self.change_state(State.IDLE)
             elif self._state is State.CHANNELS_FETCH:
                 self.gui.status.update(_("gui", "status", "gathering"))
-                # start with all current channels, clear the memory and GUI
+                # Keep the current channel lookup alive while the new list is fetched.
+                # Existing websocket topics can still deliver messages during this
+                # async work, and their channel objects are reused in new_channels.
                 new_channels: set[Channel] = set(channels.values())
-                channels.clear()
                 self.gui.channels.clear()
                 # gather and add ACL channels from campaigns
                 # NOTE: we consider only campaigns that can be progressed
@@ -788,7 +789,9 @@ class Twitch:
                         )
                     self.websocket.remove_topics(to_remove_topics)
                     del to_remove_channels, to_remove_topics
-                # set our new channel list
+                # Replace the lookup only after all async fetching is complete, so
+                # websocket messages never see a temporarily empty channel mapping.
+                channels.clear()
                 for channel in ordered_channels:
                     channels[channel.id] = channel
                     channel.display(add=True)
@@ -1053,7 +1056,7 @@ class Twitch:
         msg_type = message["type"]
         channel = self.channels.get(channel_id)
         if channel is None:
-            logger.error(f"Stream state change for a non-existing channel: {channel_id}")
+            logger.debug(f"Ignoring stream state change for an untracked channel: {channel_id}")
             return
         if msg_type == "viewcount":
             if not channel.online:
@@ -1089,7 +1092,9 @@ class Twitch:
         # }
         channel = self.channels.get(channel_id)
         if channel is None:
-            logger.error(f"Broadcast settings update for a non-existing channel: {channel_id}")
+            logger.debug(
+                f"Ignoring broadcast settings update for an untracked channel: {channel_id}"
+            )
             return
         if message["old_game"] != message["game"]:
             game_change = f", game changed: {message['old_game']} -> {message['game']}"
