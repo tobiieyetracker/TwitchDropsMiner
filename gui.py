@@ -1238,9 +1238,7 @@ class InventoryOverview:
         self._cache: ImageCache = manager._cache
         self._settings: Settings = manager._twitch.settings
         self._filters = {
-            "not_linked": IntVar(
-                master, self._settings.priority_mode is PriorityMode.PRIORITY_ONLY
-            ),
+            "not_linked": IntVar(master, 0),
             "upcoming": IntVar(master, 1),
             "expired": IntVar(master, 0),
             "excluded": IntVar(master, 0),
@@ -1258,7 +1256,9 @@ class InventoryOverview:
         ).grid(column=0, row=0)
         icolumn = 0
         ttk.Checkbutton(
-            filter_frame, variable=self._filters["not_linked"]
+            filter_frame,
+            variable=self._filters["not_linked"],
+            command=lambda: self._select_filter("not_linked"),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Label(
             filter_frame,
@@ -1266,7 +1266,9 @@ class InventoryOverview:
             padding=(0, 0, LABEL_SPACING, 0),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Checkbutton(
-            filter_frame, variable=self._filters["upcoming"]
+            filter_frame,
+            variable=self._filters["upcoming"],
+            command=lambda: self._select_filter("upcoming"),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Label(
             filter_frame,
@@ -1274,7 +1276,9 @@ class InventoryOverview:
             padding=(0, 0, LABEL_SPACING, 0),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Checkbutton(
-            filter_frame, variable=self._filters["expired"]
+            filter_frame,
+            variable=self._filters["expired"],
+            command=lambda: self._select_filter("expired"),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Label(
             filter_frame,
@@ -1282,7 +1286,9 @@ class InventoryOverview:
             padding=(0, 0, LABEL_SPACING, 0),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Checkbutton(
-            filter_frame, variable=self._filters["excluded"]
+            filter_frame,
+            variable=self._filters["excluded"],
+            command=lambda: self._select_filter("excluded"),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Label(
             filter_frame,
@@ -1290,7 +1296,9 @@ class InventoryOverview:
             padding=(0, 0, LABEL_SPACING, 0),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Checkbutton(
-            filter_frame, variable=self._filters["finished"]
+            filter_frame,
+            variable=self._filters["finished"],
+            command=lambda: self._select_filter("finished"),
         ).grid(column=(icolumn := icolumn + 1), row=0)
         ttk.Label(
             filter_frame,
@@ -1324,26 +1332,26 @@ class InventoryOverview:
         # Canvas background needs manual control
         self._canvas.configure(bg=bg)
 
+    def _select_filter(self, selected: str):
+        if self._filters[selected].get():
+            for name, variable in self._filters.items():
+                if name != selected:
+                    variable.set(0)
+
     def _update_visibility(self, campaign: DropsCampaign):
-        # True if the campaign is supposed to show, False makes it hidden.
         frame = self._campaigns[campaign]["frame"]
-        not_linked = bool(self._filters["not_linked"].get())
-        expired = bool(self._filters["expired"].get())
-        excluded = bool(self._filters["excluded"].get())
-        upcoming = bool(self._filters["upcoming"].get())
-        finished = bool(self._filters["finished"].get())
-        priority_only = self._settings.priority_mode is PriorityMode.PRIORITY_ONLY
-        if (
-            campaign.required_minutes > 0  # don't show sub-only campaigns
-            and (not_linked or campaign.eligible)
-            and (campaign.active or upcoming and campaign.upcoming or expired and campaign.expired)
-            and (
-                excluded or (
-                    campaign.game.name not in self._settings.exclude
-                    and not priority_only or campaign.game.name in self._settings.priority
-                )
-            )
-            and (finished or not campaign.finished)
+        matches = {
+            "not_linked": not campaign.linked and not campaign.expired,
+            "upcoming": campaign.linked and campaign.active,
+            "expired": campaign.expired,
+            "excluded": campaign.game.name in self._settings.exclude,
+            "finished": (
+                campaign.total_drops > 0
+                and campaign.claimed_drops == campaign.total_drops
+            ),
+        }
+        if campaign.required_minutes > 0 and any(
+            self._filters[name].get() and matches[name] for name in self._filters
         ):
             frame.grid()
         else:

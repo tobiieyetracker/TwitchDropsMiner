@@ -397,6 +397,14 @@ class DropsCampaign:
             return self._twitch.settings.enable_badges_emotes
         return self.linked
 
+    @property
+    def watch_eligible(self) -> bool:
+        # Regular campaigns can be watched before the game account is linked.
+        # Badge/emote campaigns remain controlled by their existing setting.
+        if self.has_badge_or_emote:
+            return self._twitch.settings.enable_badges_emotes
+        return True
+
     @cached_property
     def has_badge_or_emote(self) -> bool:
         return any(
@@ -449,7 +457,7 @@ class DropsCampaign:
         self, channel: Channel | None = None, ignore_channel_status: bool = False
     ) -> bool:
         return (
-            self.eligible  # account is eligible
+            self.watch_eligible  # unlinked regular campaigns can also be watched
             and self.active  # campaign is active (and valid)
             and (
                 channel is None or (  # channel isn't specified,
@@ -489,7 +497,7 @@ class DropsCampaign:
         # Same as can_earn, but doesn't check the channel
         # and uses a future timestamp to see if we can earn this campaign later
         return (
-            self.eligible
+            self.watch_eligible
             and self._valid
             and self.ends_at > datetime.now(timezone.utc)
             and self.starts_at < stamp

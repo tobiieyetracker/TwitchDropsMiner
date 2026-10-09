@@ -356,7 +356,7 @@ default_translation: Translation = {
             },
             "status": {
                 "linked": "Linked ✔",
-                "not_linked": "Not Linked ❌",
+                "not_linked": "Account not linked - forced watch",
                 "active": "Active ✔",
                 "upcoming": "Upcoming ⏳",
                 "expired": "Expired ❌",
