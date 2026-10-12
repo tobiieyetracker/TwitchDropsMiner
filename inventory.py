@@ -399,11 +399,10 @@ class DropsCampaign:
 
     @property
     def watch_eligible(self) -> bool:
-        # Regular campaigns can be watched before the game account is linked.
         # Badge/emote campaigns remain controlled by their existing setting.
         if self.has_badge_or_emote:
             return self._twitch.settings.enable_badges_emotes
-        return True
+        return self.linked or self._twitch.settings.watch_unlinked_campaigns
 
     @cached_property
     def has_badge_or_emote(self) -> bool:

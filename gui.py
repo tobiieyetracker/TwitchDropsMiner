@@ -1433,11 +1433,16 @@ class InventoryOverview:
             takefocus=False,
         ).grid(column=1, row=2, sticky="w", padx=4)
         # Linking status
-        if campaign.eligible:
+        if campaign.linked:
             link_kwargs = {
                 "style": '',
                 "text": _("gui", "inventory", "status", "linked"),
                 "foreground": "green",
+            }
+        elif campaign.watch_eligible:
+            link_kwargs = {
+                "text": _("gui", "inventory", "status", "not_linked_forced_watch"),
+                "foreground": "red",
             }
         else:
             link_kwargs = {
@@ -1574,6 +1579,7 @@ class _SettingsVars(TypedDict):
     priority_mode: StringVar
     tray_notifications: IntVar
     enable_badges_emotes: IntVar
+    watch_unlinked_campaigns: IntVar
     available_drops_check: IntVar
 
 
@@ -1610,6 +1616,9 @@ class SettingsPanel:
             "tray_notifications": IntVar(master, self._settings.tray_notifications),
             "enable_badges_emotes": IntVar(
                 master, int(self._settings.enable_badges_emotes)
+            ),
+            "watch_unlinked_campaigns": IntVar(
+                master, int(self._settings.watch_unlinked_campaigns)
             ),
             "available_drops_check": IntVar(
                 master, int(self._settings.available_drops_check)
@@ -1690,6 +1699,19 @@ class SettingsPanel:
             command=self.priority_mode,
             textvariable=self._vars["priority_mode"],
             values=list(self.PRIORITY_MODES.values()),
+        ).grid(column=1, row=irow, sticky="w")
+        ttk.Label(
+            checkboxes_frame,
+            text=_("gui", "settings", "general", "watch_unlinked_campaigns"),
+        ).grid(column=0, row=(irow := irow + 1), sticky="e")
+        ttk.Checkbutton(
+            checkboxes_frame,
+            variable=self._vars["watch_unlinked_campaigns"],
+            command=lambda: setattr(
+                self._settings,
+                "watch_unlinked_campaigns",
+                bool(self._vars["watch_unlinked_campaigns"].get()),
+            ),
         ).grid(column=1, row=irow, sticky="w")
 
         # proxy frame
@@ -2848,6 +2870,7 @@ if __name__ == "__main__":
                 exclude={"Lit Game"},
                 tray_notifications=True,
                 enable_badges_emotes=False,
+                watch_unlinked_campaigns=True,
                 available_drops_check=False,
                 logging_level=LOGGING_LEVELS[0],
                 priority_mode=PriorityMode.PRIORITY_ONLY,

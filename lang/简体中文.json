@@ -113,7 +113,8 @@
             },
             "status": {
                 "linked": "账户已关联 ✔",
-                "not_linked": "账户未关联-强制观看",
+                "not_linked": "账户未关联",
+                "not_linked_forced_watch": "账户未关联-强制观看",
                 "active": "已上线 ✔",
                 "upcoming": "即将上线 ⏳",
                 "expired": "已结束 ❌",
@@ -136,6 +137,7 @@
                 "tray_notifications": "启用托盘通知",
                 "dark_mode": "夜间模式",
                 "priority_mode": "掉宝挖掘模式",
+                "watch_unlinked_campaigns": "允许未关联游戏账号的普通活动进入观看候选",
                 "proxy": "代理地址（需要重启）："
             },
             "advanced": {

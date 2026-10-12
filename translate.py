@@ -137,6 +137,7 @@ class GUIInvFilter(TypedDict):
 class GUIInvStatus(TypedDict):
     linked: str
     not_linked: str
+    not_linked_forced_watch: str
     active: str
     expired: str
     upcoming: str
@@ -163,6 +164,7 @@ class GUISettingsGeneral(TypedDict):
     tray_notifications: str
     dark_mode: str
     priority_mode: str
+    watch_unlinked_campaigns: str
     proxy: str
 
 
@@ -356,7 +358,8 @@ default_translation: Translation = {
             },
             "status": {
                 "linked": "Linked ✔",
-                "not_linked": "Account not linked - forced watch",
+                "not_linked": "Account not linked",
+                "not_linked_forced_watch": "Account not linked - forced watch",
                 "active": "Active ✔",
                 "upcoming": "Upcoming ⏳",
                 "expired": "Expired ❌",
@@ -379,6 +382,9 @@ default_translation: Translation = {
                 "tray_notifications": "Tray notifications: ",
                 "dark_mode": "Dark mode: ",
                 "priority_mode": "Priority mode: ",
+                "watch_unlinked_campaigns": (
+                    "Allow watching regular campaigns without a linked game account: "
+                ),
                 "proxy": "Proxy (requires restart):",
             },
             "advanced": {
